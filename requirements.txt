@@ -1,0 +1,27 @@
+# LLM相关
+openai>=1.0.0  # 用于连接DashScope兼容端点
+
+# DashScope相关
+dashscope>=1.14.0  # DashScope SDK（用于Embedding）
+
+# 向量数据库
+chromadb>=0.4.0
+faiss-cpu>=1.7.4
+
+# Embedding模型（可选，如果使用本地模型）
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
+# Web检索
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+google-api-python-client>=2.0.0  # Google Custom Search API（可选）
+
+# 其他工具
+numpy>=1.24.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Streamlit前端
+streamlit>=1.28.0
+

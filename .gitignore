@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 数据文件
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 日志
+*.log
+
+# 环境变量
+.env
+.env.local
+
+# 向量数据库
+vector_db/
+*.chroma
+
+# 临时文件
+*.tmp
+*.temp
+
+# 模型部署文件（文件过大，不推送）
+model_deploy/
+
