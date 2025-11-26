@@ -44,12 +44,12 @@ class EmbeddingModel:
             raise ImportError("dashscope module is not installed. Please install it with: pip install dashscope")
         
         # 初始化DashScope API Key
-        # 优先使用embedding_api_key，如果没有则使用llm_api_key（因为它们通常是同一个key）
+        # 优先使用config中的值，如果没有则从环境变量获取
         api_key = (
             config.embedding_api_key or 
             config.llm_api_key or 
-            os.getenv("DASHSCOPE_API_KEY") or 
-            os.getenv("OPENAI_API_KEY")
+            os.getenv('DASHSCOPE_API_KEY') or 
+            os.getenv('OPENAI_API_KEY')
         )
         if api_key:
             dashscope.api_key = api_key

@@ -50,22 +50,10 @@ class WebSearchTool(BaseTool):
         self.config = config
         
         # 博查 API Key（优先从config获取，然后从环境变量）
-        # 从环境变量中查找以"sk-"开头的key
-        def _find_bocha_key():
-            # 优先查找BOCHA_API_KEY
-            key = os.getenv("BOCHA_API_KEY")
-            if key and key.startswith("sk-"):
-                return key
-            # 否则搜索所有环境变量
-            for env_var, value in os.environ.items():
-                if value and isinstance(value, str) and value.startswith("sk-"):
-                    if "BOCHA" in env_var.upper() or ("API_KEY" in env_var.upper() and "BOCHA" in env_var.upper()):
-                        return value
-            return None
-        
+        # 直接使用os.getenv获取环境变量
         self.api_key = (
             getattr(config, 'bocha_api_key', None) or
-            _find_bocha_key()
+            os.getenv('BOCHA_API_KEY')
         )
         
         if not self.api_key:

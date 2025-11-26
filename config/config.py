@@ -75,36 +75,28 @@ class Config:
     def __post_init__(self):
         """初始化后处理"""
         # LLM配置（使用OpenAI接口连接到DashScope兼容端点）
-        # 优先从环境变量中查找API key
+        # 优先从环境变量中获取API key
         if not self.llm_api_key:
-            # 按优先级查找：DASHSCOPE_API_KEY > OPENAI_API_KEY > LLM_API_KEY > 模糊匹配
-            self.llm_api_key = (
-                _find_api_key_from_env("DASHSCOPE_API_KEY") or
-                _find_api_key_from_env("OPENAI_API_KEY") or
-                _find_api_key_from_env("LLM_API_KEY") or
-                _find_api_key_from_env()
-            )
+            # 直接使用os.getenv获取环境变量
+            self.llm_api_key = os.getenv('DASHSCOPE_API_KEY')
         
+        # Base URL配置：优先使用BASE_URL环境变量，然后是OPENAI_BASE_URL，最后是默认值
         if self.llm_base_url is None:
-            self.llm_base_url = os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+            self.llm_base_url = (
+                os.getenv('BASE_URL') or 
+                os.getenv('OPENAI_BASE_URL') or 
+                "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            )
         
         # Embedding配置（使用DashScope接口）
-        # 优先从环境变量中查找API key
+        # 优先从环境变量中获取API key，如果没有则使用llm_api_key
         if not self.embedding_api_key:
-            # 按优先级查找：DASHSCOPE_API_KEY > 模糊匹配 > 使用llm_api_key
-            self.embedding_api_key = (
-                _find_api_key_from_env("DASHSCOPE_API_KEY") or
-                _find_api_key_from_env() or
-                self.llm_api_key
-            )
+            self.embedding_api_key = os.getenv('DASHSCOPE_API_KEY') or self.llm_api_key
         
         if self.reflection_roles is None:
             self.reflection_roles = ["critic", "improver", "validator"]
         
-        # 博查API Key配置（从环境变量中查找）
+        # 博查API Key配置：直接使用os.getenv获取环境变量
         if not self.bocha_api_key:
-            self.bocha_api_key = (
-                _find_api_key_from_env("BOCHA_API_KEY") or
-                _find_api_key_from_env()
-            )
+            self.bocha_api_key = os.getenv('BOCHA_API_KEY')
 

@@ -69,8 +69,18 @@ class LLM:
         self.config = config or Config()
         
         # 初始化OpenAI客户端（连接到DashScope兼容端点）
-        self.api_key = self.config.llm_api_key or os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.base_url = self.config.llm_base_url or os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+        # 优先使用config中的值，如果没有则从环境变量获取
+        self.api_key = (
+            self.config.llm_api_key or 
+            os.getenv('DASHSCOPE_API_KEY') or 
+            os.getenv('OPENAI_API_KEY')
+        )
+        self.base_url = (
+            self.config.llm_base_url or 
+            os.getenv('BASE_URL') or 
+            os.getenv('OPENAI_BASE_URL') or 
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
         
         # 根据openai版本初始化客户端
         if OPENAI_NEW_VERSION:
