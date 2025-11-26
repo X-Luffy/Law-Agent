@@ -437,7 +437,7 @@ export DASHSCOPE_API_KEY="your-api-key-here"  # 替换为您的API Key
 export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # Bocha API Key（用于web_search，可选）
-export BOCHA_API_KEY="your_bocha_api_key"
+export BOCHA_API_KEY="your-bocha-key-here"  # 替换为您的Bocha API Key
 ```
 
 ### 配置文件
