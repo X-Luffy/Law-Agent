@@ -33,12 +33,17 @@ fi
 echo "✅ 环境准备完成"
 echo ""
 
-# 2. 设置环境变量
-echo "[2/3] 设置环境变量..."
-export DASHSCOPE_API_KEY="sk-5d4975fe68f24d83809ac3c7bf7468ba"
-export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-export BOCHA_API_KEY="sk-abc3ef836fd9487c867cc58df5f76c31"
-echo "✅ 环境变量已设置"
+# 2. 设置环境变量（可选，也可以在app.py的配置界面中填写）
+echo "[2/3] 检查环境变量..."
+if [ -z "$DASHSCOPE_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+    echo "⚠️  未检测到API Key环境变量"
+    echo "   您可以在app.py的配置界面中填写API Key"
+    echo "   或者设置环境变量："
+    echo "   export DASHSCOPE_API_KEY='your-api-key'"
+    echo "   export BOCHA_API_KEY='your-bocha-key' (可选)"
+else
+    echo "✅ 检测到环境变量"
+fi
 echo ""
 
 # 3. 启动Streamlit应用

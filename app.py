@@ -109,12 +109,43 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
+if "config_settings" not in st.session_state:
+    st.session_state.config_settings = {
+        "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "llm_model": "qwen-max",
+        "llm_api_key": "",
+        "embedding_model": "text-embedding-v4",
+        "bocha_api_key": ""
+    }
 
 
-def init_legal_flow():
-    """初始化LegalFlow（多Agent法律系统）"""
+def init_legal_flow(config_settings: Dict[str, str] = None):
+    """初始化LegalFlow（多Agent法律系统）
+    
+    Args:
+        config_settings: 配置字典，包含llm_base_url, llm_model, llm_api_key等
+    """
     try:
+        # 创建配置对象
         config = Config()
+        
+        # 如果提供了配置设置，则更新config
+        if config_settings:
+            if config_settings.get("llm_base_url"):
+                config.llm_base_url = config_settings["llm_base_url"]
+            if config_settings.get("llm_model"):
+                config.llm_model = config_settings["llm_model"]
+            if config_settings.get("llm_api_key"):
+                config.llm_api_key = config_settings["llm_api_key"]
+            if config_settings.get("embedding_model"):
+                config.embedding_model = config_settings["embedding_model"]
+            if config_settings.get("bocha_api_key"):
+                config.bocha_api_key = config_settings["bocha_api_key"]
+        
+        # 验证必需的配置
+        if not config.llm_api_key:
+            return None, None, "LLM API Key未设置，请在配置中填写"
+        
         core_agent = CoreAgent(config=config)
         legal_flow = LegalFlow(core_agent=core_agent, config=config)
         return legal_flow, core_agent, None
@@ -661,27 +692,87 @@ def main():
     with st.sidebar:
         st.header("⚙️ 控制台")
         
+        # 配置区域
+        with st.expander("⚙️ 系统配置", expanded=True):
+            st.markdown("**LLM配置**")
+            llm_base_url = st.text_input(
+                "Base URL",
+                value=st.session_state.config_settings.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+                help="LLM API的基础URL"
+            )
+            llm_model = st.text_input(
+                "Model Name",
+                value=st.session_state.config_settings.get("llm_model", "qwen-max"),
+                help="LLM模型名称"
+            )
+            llm_api_key = st.text_input(
+                "API Key *",
+                value=st.session_state.config_settings.get("llm_api_key", ""),
+                type="password",
+                help="LLM API Key（必填，以sk-开头）",
+                placeholder="sk-..."
+            )
+            
+            st.markdown("**Embedding配置**")
+            embedding_model = st.text_input(
+                "Embedding Model",
+                value=st.session_state.config_settings.get("embedding_model", "text-embedding-v4"),
+                help="Embedding模型名称"
+            )
+            
+            st.markdown("**工具配置**")
+            bocha_api_key = st.text_input(
+                "Bocha API Key",
+                value=st.session_state.config_settings.get("bocha_api_key", ""),
+                type="password",
+                help="Bocha搜索API Key（可选，用于web_search工具）",
+                placeholder="sk-..."
+            )
+            
+            # 保存配置到session_state
+            st.session_state.config_settings = {
+                "llm_base_url": llm_base_url,
+                "llm_model": llm_model,
+                "llm_api_key": llm_api_key,
+                "embedding_model": embedding_model,
+                "bocha_api_key": bocha_api_key
+            }
+        
+        st.divider()
+        
         # 初始化按钮
         if st.button("🚀 初始化系统", use_container_width=True):
-            with st.spinner("正在加载模型..."):
-                legal_flow, core_agent, error = init_legal_flow()
-                if legal_flow and core_agent:
-                    st.session_state.legal_flow = legal_flow
-                    st.session_state.core_agent = core_agent
-                    st.success("✅ 系统就绪！")
-                else:
-                    st.error(f"❌ 初始化失败: {error}")
+            # 验证配置
+            if not st.session_state.config_settings.get("llm_api_key"):
+                st.error("❌ 请填写LLM API Key（必填）")
+            else:
+                with st.spinner("正在加载模型..."):
+                    legal_flow, core_agent, error = init_legal_flow(st.session_state.config_settings)
+                    if legal_flow and core_agent:
+                        st.session_state.legal_flow = legal_flow
+                        st.session_state.core_agent = core_agent
+                        st.success("✅ 系统就绪！")
+                    else:
+                        st.error(f"❌ 初始化失败: {error}")
         
         # 系统状态
         if st.session_state.legal_flow and st.session_state.core_agent:
             st.success("✅ 系统已初始化")
             
-            # 显示配置信息
-            with st.expander("📋 系统配置", expanded=False):
-                st.write("**LLM模型**: qwen-max")
-                st.write("**Embedding**: text-embedding-v4")
-                st.write("**工具选择**: Native Function Calling")
-                st.write("**最大步数**: 10步")
+            # 显示当前配置信息
+            with st.expander("📋 当前配置", expanded=False):
+                config = st.session_state.core_agent.config if hasattr(st.session_state.core_agent, 'config') else None
+                if config:
+                    st.write(f"**LLM模型**: {config.llm_model}")
+                    st.write(f"**Base URL**: {config.llm_base_url}")
+                    st.write(f"**Embedding模型**: {config.embedding_model}")
+                    st.write("**工具选择**: Native Function Calling")
+                    st.write("**最大步数**: 5步")
+                else:
+                    st.write("**LLM模型**: qwen-max")
+                    st.write("**Embedding**: text-embedding-v4")
+                    st.write("**工具选择**: Native Function Calling")
+                    st.write("**最大步数**: 5步")
             
             st.divider()
             
@@ -708,13 +799,26 @@ def main():
         
         st.divider()
         
-        # 环境检查
-        st.subheader("🔍 环境检查")
-        dashscope_key = os.getenv("DASHSCOPE_API_KEY", "未设置")
-        if dashscope_key != "未设置":
-            st.success(f"✅ API Key: {dashscope_key[:20]}...")
-        else:
-            st.error("❌ DASHSCOPE_API_KEY 未设置")
+        # 环境检查（仅显示信息，不强制要求）
+        with st.expander("🔍 环境变量检查", expanded=False):
+            dashscope_key = os.getenv("DASHSCOPE_API_KEY")
+            openai_key = os.getenv("OPENAI_API_KEY")
+            bocha_key = os.getenv("BOCHA_API_KEY")
+            
+            if dashscope_key:
+                st.success(f"✅ DASHSCOPE_API_KEY: {dashscope_key[:20]}...")
+            else:
+                st.info("ℹ️ DASHSCOPE_API_KEY 未设置（可在配置中填写）")
+            
+            if openai_key:
+                st.success(f"✅ OPENAI_API_KEY: {openai_key[:20]}...")
+            else:
+                st.info("ℹ️ OPENAI_API_KEY 未设置（可在配置中填写）")
+            
+            if bocha_key:
+                st.success(f"✅ BOCHA_API_KEY: {bocha_key[:20]}...")
+            else:
+                st.info("ℹ️ BOCHA_API_KEY 未设置（可在配置中填写）")
     
     # 主界面
     if not st.session_state.legal_flow or not st.session_state.core_agent:

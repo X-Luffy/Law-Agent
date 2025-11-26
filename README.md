@@ -10,9 +10,10 @@
 # 激活conda环境
 conda activate /home/mnt/xieqinghongbing/env/open_manus
 
-# 设置环境变量
-export DASHSCOPE_API_KEY="sk-5d4975fe68f24d83809ac3c7bf7468ba"
-export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 设置环境变量（可选，也可以在app.py的配置界面中填写）
+export DASHSCOPE_API_KEY="your-api-key-here"  # 替换为您的API Key
+export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"  # 可选
+export BOCHA_API_KEY="your-bocha-key-here"  # 可选，用于web_search工具
 export BOCHA_API_KEY="your_bocha_api_key"  # 可选，用于web_search
 ```
 
@@ -430,7 +431,7 @@ FINISHED → IDLE (清理完成)
 
 ```bash
 # DashScope API Key（LLM和Embedding共用）
-export DASHSCOPE_API_KEY="sk-5d4975fe68f24d83809ac3c7bf7468ba"
+export DASHSCOPE_API_KEY="your-api-key-here"  # 替换为您的API Key
 
 # LLM配置（可选，使用默认值）
 export OPENAI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
