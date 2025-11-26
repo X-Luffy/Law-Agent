@@ -56,3 +56,6 @@ vector_db/
 # 模型部署文件（文件过大，不推送）
 model_deploy/
 
+agent/reference/
+eval/results*.json
+*.pyc
