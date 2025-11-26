@@ -1,6 +1,6 @@
 """数据模式定义"""
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 from dataclasses import dataclass, field
 
 
@@ -13,6 +13,10 @@ class Role(str, Enum):
 
 
 ROLE_TYPE = Role | str
+
+# 定义状态回调函数类型
+# 参数: stage (阶段名称/标题), message (详细信息), state (状态: running/complete/error)
+StatusCallback = Callable[[str, str, str], None]
 
 
 class AgentState(str, Enum):
@@ -32,6 +36,27 @@ class AnswerSource(str, Enum):
     MEMORY = "memory"  # 基于记忆
     GENERAL = "general"  # 一般回答
     UNABLE_TO_ANSWER = "unable_to_answer"  # 无法回答
+
+
+class LegalDomain(str, Enum):
+    """法律领域分类"""
+    LABOR_LAW = "Labor_Law"  # 劳动法：裁员、工资
+    FAMILY_LAW = "Family_Law"  # 婚姻家事：离婚、抚养权
+    CONTRACT_LAW = "Contract_Law"  # 合同纠纷
+    CORPORATE_LAW = "Corporate_Law"  # 公司法
+    CRIMINAL_LAW = "Criminal_Law"  # 刑法
+    PROCEDURAL_QUERY = "Procedural_Query"  # 程序性问题：去哪个法院起诉、诉讼费多少
+    NON_LEGAL = "Non_Legal"  # 非法律问题（闲聊、天气、其他专业领域等）
+
+
+class LegalIntent(str, Enum):
+    """法律专业意图类型"""
+    QA_RETRIEVAL = "QA_Retrieval"  # 法律法规、法条、类似案例查询
+    CASE_ANALYSIS = "Case_Analysis"  # 案情分析（用户描述了一个故事）
+    DOC_DRAFTING = "Doc_Drafting"  # 起草文书（合同、起诉状、律师函）
+    CALCULATION = "Calculation"  # 计算赔偿金、刑期、诉讼费
+    REVIEW_CONTRACT = "Review_Contract"  # 审查合同风险
+    CLARIFICATION = "Clarification"  # 信息不足，需要反问
 
 
 @dataclass
@@ -64,17 +89,24 @@ class Message:
         return cls(role=Role.TOOL, content=content, tool_call_id=tool_call_id, name=name)
     
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        result = {
-            "role": self.role.value if isinstance(self.role, Role) else self.role,
-            "content": self.content
-        }
-        if self.tool_calls:
-            result["tool_calls"] = self.tool_calls
-        if self.tool_call_id:
-            result["tool_call_id"] = self.tool_call_id
-        if self.name:
-            result["name"] = self.name
+        """转换为字典（OpenAI格式）"""
+        role = self.role.value if isinstance(self.role, Role) else self.role
+        
+        # 对于tool消息，OpenAI格式需要role="tool"且包含tool_call_id
+        if role == "tool":
+            result = {
+                "role": "tool",
+                "content": self.content,
+                "tool_call_id": self.tool_call_id
+            }
+        else:
+            result = {
+                "role": role,
+                "content": self.content
+            }
+            # assistant消息可能包含tool_calls
+            if self.tool_calls:
+                result["tool_calls"] = self.tool_calls
         return result
 
 

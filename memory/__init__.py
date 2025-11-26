@@ -1,22 +1,16 @@
-"""记忆系统模块"""
+"""记忆模块：包含短期记忆、全局信息、长期记忆和上下文管理"""
 from .session import SessionMemory
 from .vector_db import VectorDatabase
+from .global_memory import GlobalMemory
 from .memory_manager import MemoryManager
-from .vector_store_interface import VectorStoreInterface
-from .vector_store_placeholder import VectorStorePlaceholder
+from .manager import ContextManager
+from .refiner import ContextRefiner
 
 __all__ = [
     'SessionMemory',
     'VectorDatabase',
+    'GlobalMemory',
     'MemoryManager',
-    'VectorStoreInterface',
-    'VectorStorePlaceholder'
+    'ContextManager',
+    'ContextRefiner'
 ]
-
-# 尝试导入ChromaDB实现（如果可用）
-try:
-    from .vector_store_chroma import ChromaVectorStore
-    __all__.append('ChromaVectorStore')
-except ImportError:
-    pass
-

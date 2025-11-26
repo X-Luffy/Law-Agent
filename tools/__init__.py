@@ -9,6 +9,7 @@ from .common_tools import (
 )
 from .realtime_tools import WeatherTool, WebCrawlerTool
 from .tool_manager import ToolManager
+from .tool_registry import ToolRegistry
 
 __all__ = [
     'BaseTool',
@@ -19,6 +20,7 @@ __all__ = [
     'DateTimeTool',
     'WeatherTool',
     'WebCrawlerTool',
-    'ToolManager'
+    'ToolManager',
+    'ToolRegistry'
 ]
 

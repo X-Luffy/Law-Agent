@@ -3,7 +3,18 @@ from typing import Dict, Any, Optional
 import requests
 from datetime import datetime
 from .base import BaseTool
-from ..config.config import Config
+# 处理相对导入问题
+try:
+    from ..config.config import Config
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from config.config import Config
 
 
 class WeatherTool(BaseTool):
@@ -113,36 +124,75 @@ class WeatherTool(BaseTool):
     def _get_weather_from_web(self, city: str) -> Optional[Dict[str, Any]]:
         """从Web搜索获取天气信息（备用方案）"""
         try:
-            # 使用Web搜索工具搜索天气信息
+            # 使用博查Web搜索工具搜索天气信息
             from .web_search import WebSearchTool
             web_search = WebSearchTool(self.config)
             
             # 构建搜索查询
             query = f"{city} 天气 今天"
-            search_results = web_search.execute(query, {"max_results": 3})
+            search_results_text = web_search.execute(query, {"max_results": 3})
             
-            if search_results.get("results"):
-                # 从搜索结果中提取天气信息
-                first_result = search_results["results"][0]
-                snippet = first_result.get("snippet", "")
+            # 博查API返回的是格式化的文本，需要解析
+            # 格式：Result 1:\nTitle: ...\nSource: ...\nContent: ...
+            if search_results_text and "Result 1:" in search_results_text:
+                # 简单解析：提取第一个结果的Content
+                lines = search_results_text.split("\n")
+                content = ""
+                source = ""
+                for i, line in enumerate(lines):
+                    if line.startswith("Source:"):
+                        source = line.replace("Source:", "").strip()
+                    elif line.startswith("Content:"):
+                        # 获取Content直到下一个分隔符
+                        content = line.replace("Content:", "").strip()
+                        # 继续读取直到遇到分隔符
+                        for j in range(i + 1, len(lines)):
+                            if lines[j].startswith("-" * 30):
+                                break
+                            content += " " + lines[j].strip()
+                        break
                 
-                # 尝试从snippet中提取天气信息
-                # 这里提供一个简单的解析，实际可以更复杂
-                return {
-                    "city": city,
-                    "weather_info": snippet,
-                    "source": first_result.get("url", ""),
-                    "update_time": datetime.now().isoformat(),
-                    "source_type": "web_search"
-                }
+                if content:
+                    return {
+                        "city": city,
+                        "weather_info": content,
+                        "source": source,
+                        "update_time": datetime.now().isoformat(),
+                        "source_type": "web_search"
+                    }
         except Exception as e:
             print(f"Web weather search error: {e}")
         
         return None
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "城市名称（如：深圳、Shenzhen）"
+                        }
+                    },
+                    "required": ["city"]
+                }
+            }
+        }
 
 
 class WebCrawlerTool(BaseTool):
-    """网络爬虫工具，用于爬取网页内容用于RAG检索"""
+    """网络爬虫工具，用于爬取网页内容"""
     
     def __init__(self, config: Config):
         """
@@ -153,7 +203,7 @@ class WebCrawlerTool(BaseTool):
         """
         super().__init__(
             name="web_crawler",
-            description="Crawl and extract content from web pages. Use this tool when you need to get detailed content from a specific URL for RAG retrieval. Input should be a URL or a list of URLs."
+            description="Crawl and extract content from web pages. Use this tool when you need to get detailed content from a specific URL. Input should be a URL or a list of URLs."
         )
         self.config = config
         self.timeout = 10
@@ -272,4 +322,29 @@ class WebCrawlerTool(BaseTool):
         except Exception as e:
             print(f"Error crawling URL {url}: {e}")
             return None
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "要爬取的网页URL（可以是单个URL或JSON格式的URL列表）"
+                        }
+                    },
+                    "required": ["url"]
+                }
+            }
+        }
 

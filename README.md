@@ -1,6 +1,6 @@
 # Agent System
 
-一个完整的智能Agent系统，包含工具系统、记忆系统、上下文管理、意图识别、RAG检索和Self-reflection功能。
+一个完整的智能Agent系统，包含工具系统、记忆系统、上下文管理、意图识别和Self-reflection功能。
 
 ## 快速开始
 
@@ -59,7 +59,6 @@ Agent/
 ├── embedding/       # Embedding模型和工具选择
 ├── context/         # 上下文管理（窗口裁剪、上下文精炼）
 ├── intent/          # 用户意图识别和状态管理
-├── rag/             # RAG模块（向量存储、检索器、管理器）
 ├── reflection/      # Self-reflection功能
 ├── config/          # 配置文件
 ├── schema.py        # 数据模式定义
@@ -90,12 +89,6 @@ Agent/
 - **短期记忆（session）**: 存储当前会话的对话历史
 - **长期记忆（向量数据库）**: 统一存储对话记录、工具描述、精炼上下文等
 - **自动降级**: 如果ChromaDB未安装，自动使用内存占位符实现
-
-### RAG模块
-
-- **法律专业信息库RAG**: 从法律专业信息库检索相关片段，使用LLM整合生成答案
-- **Web检索RAG**: 使用Google搜索工具检索网络信息，使用LLM整合生成答案
-- **自动选择**: 根据查询自动选择RAG类型或混合使用
 
 ### 上下文管理
 
@@ -159,29 +152,6 @@ response = asyncio.run(agent.process_message(user_message))
 print(response)
 ```
 
-### 添加法律文档到知识库
-
-```python
-from Agent.rag.rag_manager import RAGManager
-
-rag_manager = RAGManager(config)
-
-# 添加法律文档
-documents = [
-    "《合同法》第一条：为了保护合同当事人的合法权益...",
-    "《合同法》第二条：本法所称合同是平等主体的自然人...",
-]
-
-metadatas = [
-    {"law_type": "合同法", "chapter": "第一章"},
-    {"law_type": "合同法", "chapter": "第一章"},
-]
-
-rag_manager.add_knowledge_base(
-    documents=documents,
-    metadatas=metadatas
-)
-```
 
 ## 系统状态
 

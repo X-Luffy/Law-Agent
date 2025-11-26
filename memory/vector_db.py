@@ -2,8 +2,20 @@
 from typing import List, Dict, Any, Optional
 import uuid
 from .vector_store_interface import VectorStoreInterface
-from ..config.config import Config
-from ..embedding.model import EmbeddingModel
+# 处理相对导入问题
+try:
+    from ..config.config import Config
+    from ..models.model import EmbeddingModel
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from config.config import Config
+    from models.model import EmbeddingModel
 
 
 class VectorDatabase:

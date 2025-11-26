@@ -1,12 +1,29 @@
-"""记忆管理器（整合长期记忆和短期记忆）"""
+"""记忆管理器：统一管理短期记忆、全局信息和长期记忆"""
 from typing import Dict, Any, List, Optional
 from .session import SessionMemory
 from .vector_db import VectorDatabase
-from ..config.config import Config
+from .global_memory import GlobalMemory
+# 处理相对导入问题
+try:
+    from ..config.config import Config
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from config.config import Config
 
 
 class MemoryManager:
-    """记忆管理器，统一管理短期记忆和长期记忆（包括对话记录、工具描述、精炼上下文等）"""
+    """
+    记忆管理器，统一管理三种记忆：
+    1. 短期记忆（SessionMemory）：最近几次对话记录
+    2. 全局信息（GlobalMemory）：CoreAgent提取的关键属性（当事人、金额、时间等硬指标）
+    3. 长期记忆（VectorDatabase）：久远对话记录的embedding向量化存储
+    """
     
     def __init__(self, config: Config, vector_store=None):
         """
@@ -17,8 +34,15 @@ class MemoryManager:
             vector_store: 向量存储接口（可选）
         """
         self.config = config
-        self.vector_db = VectorDatabase(config, vector_store=vector_store)
+        
+        # 短期记忆：最近几次对话记录
         self.sessions: Dict[str, SessionMemory] = {}
+        
+        # 全局信息：CoreAgent提取的关键属性
+        self.global_memory = GlobalMemory(config)
+        
+        # 长期记忆：久远对话记录的embedding向量化存储
+        self.vector_db = VectorDatabase(config, vector_store=vector_store)
     
     def get_session(self, session_id: str) -> SessionMemory:
         """
@@ -187,6 +211,31 @@ class MemoryManager:
             self.sessions[session_id].clear()
             del self.sessions[session_id]
     
+    def get_global_memory(self) -> GlobalMemory:
+        """
+        获取全局信息记忆
+        
+        Returns:
+            GlobalMemory实例
+        """
+        return self.global_memory
+    
+    def update_global_memory(
+        self,
+        domain: Optional[str] = None,
+        intent: Optional[str] = None,
+        entities: Optional[Dict[str, Any]] = None
+    ):
+        """
+        更新全局信息记忆
+        
+        Args:
+            domain: 法律领域（可选）
+            intent: 法律意图（可选）
+            entities: 关键实体字典（可选）
+        """
+        self.global_memory.update(domain=domain, intent=intent, entities=entities)
+    
     def get_memory_statistics(self) -> Dict[str, Any]:
         """
         获取记忆统计信息
@@ -195,15 +244,24 @@ class MemoryManager:
             统计信息字典
         """
         return {
-            "total_memories": self.vector_db.count_memories(),
-            "conversation_memories": self.vector_db.count_memories(
-                filter_metadata={"type": "conversation"}
-            ),
-            "tool_descriptions": self.vector_db.count_memories(
-                filter_metadata={"type": "tool_description"}
-            ),
-            "refined_contexts": self.vector_db.count_memories(
-                filter_metadata={"type": "refined_context"}
-            ),
-            "active_sessions": len(self.sessions)
+            "short_term_sessions": len(self.sessions),
+            "global_info": {
+                "domain": self.global_memory.global_info.get("domain"),
+                "intent": self.global_memory.global_info.get("intent"),
+                "entities_count": {
+                    "persons": len(self.global_memory.global_info["entities"].get("persons", [])),
+                    "amounts": len(self.global_memory.global_info["entities"].get("amounts", [])),
+                    "dates": len(self.global_memory.global_info["entities"].get("dates", [])),
+                    "locations": len(self.global_memory.global_info["entities"].get("locations", []))
+                }
+            },
+            "long_term_memories": {
+                "total": self.vector_db.count_memories(),
+                "conversations": self.vector_db.count_memories(
+                    filter_metadata={"type": "conversation"}
+                ),
+                "refined_contexts": self.vector_db.count_memories(
+                    filter_metadata={"type": "refined_context"}
+                )
+            }
         }

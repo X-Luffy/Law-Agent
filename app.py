@@ -1,4 +1,4 @@
-"""Streamlit前端应用"""
+"""Streamlit前端应用 - 增强版：实时状态 + 聚合详情页"""
 import streamlit as st
 import sys
 import os
@@ -17,214 +17,129 @@ os.chdir(project_root)
 
 try:
     from Agent.config.config import Config
-    from Agent.agent.agent import Agent
+    from Agent.flow.legal_flow import LegalFlow
+    from Agent.agent.core_agent import CoreAgent
 except ImportError:
     # 如果导入失败，尝试直接导入
     sys.path.insert(0, project_root)
     from config.config import Config
-    from agent.agent import Agent
+    from flow.legal_flow import LegalFlow
+    from agent.core_agent import CoreAgent
 
 # 页面配置
 st.set_page_config(
-    page_title="Agent System",
-    page_icon="🤖",
+    page_title="Legal Agent System",
+    page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# CSS 样式优化
+st.markdown("""
+<style>
+    .stStatus { border-radius: 10px; }
+    .process-step { 
+        padding: 12px; 
+        border-left: 4px solid #e0e0e0; 
+        margin-left: 10px; 
+        margin-bottom: 12px;
+        border-radius: 4px;
+    }
+    .process-step.think { 
+        border-color: #4A90E2; 
+        background-color: #f0f7ff; 
+    }
+    .process-step.tool_call { 
+        border-color: #F5A623; 
+        background-color: #fffaf0; 
+    }
+    .process-step.critic { 
+        border-color: #7ED321; 
+        background-color: #f6ffed; 
+    }
+    .process-step.stage { 
+        border-color: #9B59B6; 
+        background-color: #f9f3ff; 
+    }
+    .step-title { 
+        font-weight: bold; 
+        font-size: 0.95em; 
+        margin-bottom: 6px; 
+        color: #2c3e50;
+    }
+    .step-content { 
+        font-size: 0.85em; 
+        color: #555; 
+        line-height: 1.5;
+    }
+    .step-meta {
+        font-size: 0.75em;
+        color: #999;
+        margin-top: 4px;
+    }
+    .source-card {
+        padding: 10px;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        background-color: #fafbfc;
+        transition: all 0.2s;
+    }
+    .source-card:hover {
+        background-color: #f3f4f6;
+        border-color: #4A90E2;
+    }
+    .metric-card {
+        text-align: center;
+        padding: 10px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 8px;
+        margin-bottom: 10px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # 初始化session state
-if "agent" not in st.session_state:
-    st.session_state.agent = None
+if "legal_flow" not in st.session_state:
+    st.session_state.legal_flow = None
+if "core_agent" not in st.session_state:
+    st.session_state.core_agent = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
-if "system_info" not in st.session_state:
-    st.session_state.system_info = {}
-if "sources" not in st.session_state:
-    st.session_state.sources = {}  # 存储每条消息的来源链接
-if "execution_log" not in st.session_state:
-    st.session_state.execution_log = []  # 存储执行日志
 
 
-def init_agent():
-    """初始化Agent"""
+def init_legal_flow():
+    """初始化LegalFlow（多Agent法律系统）"""
     try:
         config = Config()
-        agent = Agent(
-            name="legal_assistant",
-            description="法律对话助手",
-            system_prompt="你是一个专业的法律助手，请根据用户的问题提供准确、专业的回答。",
-            config=config
-        )
-        return agent, None
+        core_agent = CoreAgent(config=config)
+        legal_flow = LegalFlow(core_agent=core_agent, config=config)
+        return legal_flow, core_agent, None
     except Exception as e:
-        return None, str(e)
-
-
-def format_message(message: Dict[str, Any]) -> str:
-    """格式化消息显示"""
-    role = message.get("role", "")
-    content = message.get("content", "")
-    timestamp = message.get("timestamp", "")
-    
-    if role == "user":
-        return f"**用户** ({timestamp}):\n{content}"
-    elif role == "assistant":
-        return f"**Agent** ({timestamp}):\n{content}"
-    elif role == "system":
-        return f"**系统** ({timestamp}):\n{content}"
-    else:
-        return f"**{role}** ({timestamp}):\n{content}"
+        return None, None, str(e)
 
 
 def extract_urls_from_text(text: str) -> List[str]:
     """从文本中提取URL"""
-    # URL正则表达式
     url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
     urls = re.findall(url_pattern, text)
     return urls
 
 
-def extract_sources_from_response(response: str, context: Optional[Dict] = None) -> List[Dict[str, Any]]:
-    """从回复和上下文中提取来源信息"""
-    sources = []
-    
-    # 从文本中提取URL
-    urls = extract_urls_from_text(response)
-    for url in urls:
-        sources.append({
-            "type": "url",
-            "url": url,
-            "title": url[:50] + "..." if len(url) > 50 else url
-        })
-    
-    # 从context中提取RAG来源
-    if context and context.get("rag_result"):
-        rag_result = context.get("rag_result")
-        if rag_result.get("sources"):
-            for source in rag_result["sources"]:
-                if isinstance(source, dict):
-                    url = source.get("url", "")
-                    title = source.get("title", "")
-                    if url:
-                        sources.append({
-                            "type": "rag_source",
-                            "url": url,
-                            "title": title or url[:50] + "..." if len(url) > 50 else url,
-                            "snippet": source.get("snippet", "")[:100]
-                        })
-    
-    return sources
-
-
-def display_sources(sources: List[Dict[str, Any]]):
-    """显示来源链接"""
-    if sources:
-        # 使用可展开的容器显示来源
-        with st.expander("🔗 信息来源（点击查看原文）", expanded=True):
-            for i, source in enumerate(sources, 1):
-                source_type = source.get("type", "url")
-                url = source.get("url", "")
-                title = source.get("title", url)
-                snippet = source.get("snippet", "")
-                
-                if url:
-                    # 使用markdown显示链接（可点击）
-                    if snippet:
-                        st.markdown(f"**来源 {i}**: [{title}]({url})")
-                        st.caption(f"{snippet}...")
-                    else:
-                        st.markdown(f"**来源 {i}**: [{title}]({url})")
-                    
-                    # 添加分隔线（除了最后一个）
-                    if i < len(sources):
-                        st.divider()
-
-
-def display_execution_log(log_entries: List[Dict[str, Any]]):
-    """显示执行日志"""
-    if log_entries:
-        with st.expander("📊 执行日志（详细流程）", expanded=True):
-            for i, entry in enumerate(log_entries, 1):
-                stage = entry.get("stage", "")
-                status = entry.get("status", "")
-                message = entry.get("message", "")
-                elapsed_time = entry.get("elapsed_time", 0)
-                details = entry.get("details", {})
-                
-                # 显示阶段信息
-                status_icon = "✅" if status == "success" else "⏳" if status == "running" else "❌"
-                st.markdown(f"**{i}. {status_icon} {stage}**")
-                
-                if message:
-                    st.write(f"   {message}")
-                
-                if elapsed_time > 0:
-                    st.caption(f"   耗时: {elapsed_time:.2f}秒")
-                
-                # 显示详细信息
-                if details:
-                    with st.expander(f"查看详情", expanded=False):
-                        for key, value in details.items():
-                            if key == "tool_results" and isinstance(value, list):
-                                st.write(f"**{key}**:")
-                                for tool_result in value:
-                                    st.write(f"  - **{tool_result.get('tool', 'unknown')}**: {tool_result.get('result_preview', '')}")
-                            elif isinstance(value, (dict, list)):
-                                st.json(value)
-                            else:
-                                st.write(f"**{key}**: {value}")
-                
-                if i < len(log_entries):
-                    st.divider()
-
-
-def display_conversation():
-    """显示对话历史"""
-    if st.session_state.messages:
-        # 使用chat_message显示对话
-        for idx, msg in enumerate(st.session_state.messages):
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-                if msg.get("timestamp"):
-                    st.caption(f"时间: {msg['timestamp']}")
-                
-                # 显示来源链接（如果有，只对assistant消息显示）
-                if msg["role"] == "assistant":
-                    msg_id = f"msg_{idx}"
-                    if msg_id in st.session_state.sources:
-                        st.divider()
-                        display_sources(st.session_state.sources[msg_id])
-
-
-def display_system_info():
-    """显示系统信息"""
-    if st.session_state.system_info:
-        st.subheader("📊 系统信息")
-        
-        # Agent状态
-        if "agent_state" in st.session_state.system_info:
-            st.write("**Agent状态**:", st.session_state.system_info["agent_state"])
-        
-        # 意图信息
-        if "intent" in st.session_state.system_info:
-            st.write("**识别意图**:", st.session_state.system_info["intent"])
-        
-        # 工具使用
-        if "tools_used" in st.session_state.system_info:
-            st.write("**使用工具**:", ", ".join(st.session_state.system_info["tools_used"]) if st.session_state.system_info["tools_used"] else "无")
-        
-        # 记忆统计
-        if "memory_stats" in st.session_state.system_info:
-            memory_stats = st.session_state.system_info["memory_stats"]
-            st.write("**短期记忆**:", f"{memory_stats.get('short_term', 0)} 条消息")
-            st.write("**长期记忆**:", f"{memory_stats.get('long_term', 0)} 条记录")
-
-
-def log_execution_stage(stage: str, status: str, message: str = "", elapsed_time: float = 0, details: Dict = None):
-    """记录执行阶段"""
-    log_entry = {
+def log_execution_step(
+    step_type: str,
+    stage: str,
+    status: str,
+    message: str = "",
+    elapsed_time: float = 0,
+    details: Dict = None
+):
+    """记录执行步骤"""
+    return {
+        "step_type": step_type,
         "stage": stage,
         "status": status,
         "message": message,
@@ -232,21 +147,340 @@ def log_execution_stage(stage: str, status: str, message: str = "", elapsed_time
         "details": details or {},
         "timestamp": datetime.now().strftime("%H:%M:%S")
     }
-    st.session_state.execution_log.append(log_entry)
-    return log_entry
+
+
+def extract_execution_details_from_agent(core_agent: CoreAgent) -> List[Dict[str, Any]]:
+    """从Agent的memory中提取详细的执行信息（包括子Agent的执行步骤）"""
+    log_entries = []
+    
+    try:
+        # 首先尝试从子Agent的memory中提取（更详细）
+        if hasattr(core_agent, 'sub_agents') and core_agent.sub_agents:
+            print(f"[DEBUG] Found {len(core_agent.sub_agents)} sub_agents")
+            # 获取最近使用的子Agent（通常是最后一个）
+            sub_agent_list = list(core_agent.sub_agents.items())
+            if sub_agent_list:
+                # 使用最后一个子Agent（最近使用的）
+                agent_key, sub_agent = sub_agent_list[-1]
+                print(f"[DEBUG] 从子Agent提取日志: {agent_key}")
+                
+                if hasattr(sub_agent, 'memory') and sub_agent.memory and hasattr(sub_agent.memory, 'messages'):
+                    messages = sub_agent.memory.messages
+                    print(f"[DEBUG] 子Agent memory消息数: {len(messages)}")
+                    current_step = 0
+                    
+                    for i, msg in enumerate(messages):
+                        # 检查是否是assistant消息（包含think内容或tool_calls）
+                        if hasattr(msg, 'role') and msg.role == 'assistant':
+                            # 检查是否有tool_calls
+                            if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                # 这是一个think步骤，产生了tool_calls
+                                current_step += 1
+                                think_content = getattr(msg, 'content', '') or ''
+                                
+                                # 提取tool_calls详情
+                                tool_calls_details = []
+                                for tool_call in msg.tool_calls:
+                                    if isinstance(tool_call, dict):
+                                        func = tool_call.get('function', {})
+                                        args_str = func.get('arguments', '{}')
+                                        # 尝试解析arguments
+                                        try:
+                                            import json
+                                            args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
+                                        except:
+                                            args_dict = args_str
+                                        
+                                        tool_calls_details.append({
+                                            "name": func.get('name', ''),
+                                            "arguments": args_dict
+                                        })
+                                
+                                log_entries.append(log_execution_step(
+                                    step_type="think",
+                                    stage=f"Step {current_step}: Think (生成工具调用)",
+                                    status="success",
+                                    message=think_content[:200] + "..." if len(think_content) > 200 else think_content,
+                                    elapsed_time=0,
+                                    details={
+                                        "tool_calls": tool_calls_details,
+                                        "step_info": {
+                                            "step": current_step,
+                                            "max_steps": getattr(sub_agent, 'max_steps', 10)
+                                        }
+                                    }
+                                ))
+                            elif hasattr(msg, 'content') and msg.content:
+                                # 这是一个think步骤，但没有tool_calls（可能是最终回答）
+                                think_content = msg.content
+                                # 检查是否是最终回答（在tool消息之后）
+                                has_tool_before = any(
+                                    hasattr(m, 'role') and m.role == 'tool' 
+                                    for m in messages[:i]
+                                )
+                                if has_tool_before and len(think_content) > 50:
+                                    current_step += 1
+                                    log_entries.append(log_execution_step(
+                                        step_type="think",
+                                        stage=f"Step {current_step}: Think (生成最终回答)",
+                                        status="success",
+                                        message=think_content[:300] + "..." if len(think_content) > 300 else think_content,
+                                        elapsed_time=0,
+                                        details={
+                                            "step_info": {
+                                                "step": current_step,
+                                                "max_steps": getattr(sub_agent, 'max_steps', 10)
+                                            }
+                                        }
+                                    ))
+                        
+                        # 检查是否是tool消息（工具执行结果）
+                        elif hasattr(msg, 'role') and msg.role == 'tool':
+                            tool_name = getattr(msg, 'name', '') or ''
+                            tool_content = getattr(msg, 'content', '') or ''
+                            
+                            if tool_name:
+                                log_entries.append(log_execution_step(
+                                    step_type="tool_call",
+                                    stage=f"Step {current_step}: Act (执行工具: {tool_name})",
+                                    status="success",
+                                    message=f"工具 {tool_name} 执行完成",
+                                    elapsed_time=0,
+                                    details={
+                                        "tool_result": {
+                                            "tool": tool_name,
+                                            "result": tool_content[:1000] + "..." if len(tool_content) > 1000 else tool_content
+                                        }
+                                    }
+                                ))
+                    
+                    # 如果从子Agent提取到了信息，直接返回
+                    if log_entries:
+                        print(f"[DEBUG] 从子Agent提取到 {len(log_entries)} 条日志")
+                        return log_entries
+                else:
+                    print(f"[DEBUG] 子Agent没有memory或messages属性")
+        else:
+            print("[DEBUG] No sub_agents found or empty")
+        
+        # 如果子Agent没有信息，从CoreAgent的memory中提取
+        if hasattr(core_agent, 'memory') and core_agent.memory and hasattr(core_agent.memory, 'messages'):
+            messages = core_agent.memory.messages
+            print(f"[DEBUG] 从CoreAgent memory提取，消息数: {len(messages)}")
+            current_step = 0
+            
+            for i, msg in enumerate(messages):
+                if hasattr(msg, 'role') and msg.role == 'assistant':
+                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                        current_step += 1
+                        think_content = getattr(msg, 'content', '') or ''
+                        
+                        tool_calls_details = []
+                        for tool_call in msg.tool_calls:
+                            if isinstance(tool_call, dict):
+                                func = tool_call.get('function', {})
+                                args_str = func.get('arguments', '{}')
+                                try:
+                                    import json
+                                    args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
+                                except:
+                                    args_dict = args_str
+                                
+                                tool_calls_details.append({
+                                    "name": func.get('name', ''),
+                                    "arguments": args_dict
+                                })
+                        
+                        log_entries.append(log_execution_step(
+                            step_type="think",
+                            stage=f"Step {current_step}: Think (生成工具调用)",
+                            status="success",
+                            message=think_content[:200] + "..." if len(think_content) > 200 else think_content,
+                            elapsed_time=0,
+                            details={
+                                "tool_calls": tool_calls_details,
+                                "step_info": {
+                                    "step": current_step,
+                                    "max_steps": getattr(core_agent, 'max_steps', 10)
+                                }
+                            }
+                        ))
+                
+                elif hasattr(msg, 'role') and msg.role == 'tool':
+                    tool_name = getattr(msg, 'name', '') or ''
+                    tool_content = getattr(msg, 'content', '') or ''
+                    
+                    if tool_name:
+                        log_entries.append(log_execution_step(
+                            step_type="tool_call",
+                            stage=f"Step {current_step}: Act (执行工具: {tool_name})",
+                            status="success",
+                            message=f"工具 {tool_name} 执行完成",
+                            elapsed_time=0,
+                            details={
+                                "tool_result": {
+                                    "tool": tool_name,
+                                    "result": tool_content[:1000] + "..." if len(tool_content) > 1000 else tool_content
+                                }
+                            }
+                        ))
+        else:
+            print(f"[DEBUG] CoreAgent没有memory或messages属性")
+    
+    except Exception as e:
+        print(f"[ERROR] extract_execution_details_from_agent failed: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    if not log_entries:
+        print("[DEBUG] No log entries extracted, returning empty list")
+    else:
+        print(f"[DEBUG] Extracted {len(log_entries)} log entries")
+    
+    return log_entries
+
+
+def render_execution_timeline(log_entries: List[Dict[str, Any]], message_idx: int = 0):
+    """在可展开区域中渲染漂亮的执行时间轴
+    
+    Args:
+        log_entries: 日志条目列表
+        message_idx: 消息索引（用于生成唯一的key，避免多个消息间的重复）
+    """
+    if not log_entries:
+        st.info("📝 暂无执行细节")
+        return
+
+    # 1. 概览统计
+    total_time = sum(entry.get("elapsed_time", 0) for entry in log_entries)
+    tools_called = set()
+    think_steps = 0
+    
+    for entry in log_entries:
+        if entry.get("step_type") == "think":
+            think_steps += 1
+        if entry.get("details", {}).get("tool_result"):
+            tools_called.add(entry["details"]["tool_result"]["tool"])
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("⏱️ 总耗时", f"{total_time:.2f}s" if total_time > 0 else "N/A")
+    with col2:
+        st.metric("💭 思考步骤", think_steps)
+    with col3:
+        st.metric("🛠️ 工具调用", len(tools_called))
+
+    st.divider()
+
+    # 2. 详细步骤渲染
+    for i, entry in enumerate(log_entries, 1):
+        step_type = entry.get("step_type", "stage")
+        status = entry.get("status", "")
+        message = entry.get("message", "")
+        details = entry.get("details", {})
+        timestamp = entry.get("timestamp", "")
+        
+        # 定义图标
+        icon_map = {
+            "stage": "📍", "think": "💭", "act": "⚡", 
+            "tool_call": "🛠️", "critic": "🔍", "error": "❌"
+        }
+        icon = icon_map.get(step_type, "📝")
+        
+        # CSS class
+        css_class = f"process-step {step_type}"
+        
+        # 渲染内容块
+        st.markdown(f"""
+        <div class="{css_class}">
+            <div class="step-title">{icon} {entry.get('stage', 'Step')}</div>
+            <div class="step-content">{message}</div>
+            <div class="step-meta">🕐 {timestamp}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 详情展示（如果有）
+        if details:
+            # 工具调用详情
+            if "tool_calls" in details and details["tool_calls"]:
+                with st.expander("🔧 查看工具调用参数", expanded=False):
+                    for tool_idx, tool in enumerate(details["tool_calls"]):
+                        st.write(f"**Tool**: `{tool.get('name', 'unknown')}`")
+                        if tool.get('arguments'):
+                            st.json(tool['arguments'])
+            
+            # 工具结果详情
+            if "tool_result" in details:
+                with st.expander("📊 查看工具返回结果", expanded=False):
+                    tool_result = details["tool_result"]
+                    st.caption(f"🛠️ **Tool**: {tool_result.get('tool', 'unknown')}")
+                    result_text = tool_result.get('result', '')
+                    if len(result_text) > 500:
+                        # 使用消息索引、步骤索引和时间戳生成唯一的key，确保跨消息的唯一性
+                        timestamp_hash = hash(timestamp) % 10000 if timestamp else 0
+                        unique_key = f"tool_result_msg{message_idx}_step{i}_{tool_result.get('tool', 'unknown')}_{timestamp_hash}"
+                        st.text_area("Result", result_text, height=200, key=unique_key)
+                    else:
+                        st.code(result_text, language="text")
+            
+            # Critic 反馈
+            if "critic_feedback" in details:
+                feedback = details["critic_feedback"]
+                if feedback.get("is_acceptable"):
+                    st.success("✅ Critic评估：通过")
+                else:
+                    st.warning(f"⚠️ Critic评估：不通过")
+                    st.caption(f"反馈: {feedback.get('feedback', '')}")
+            
+            # 实体识别结果
+            if "entities" in details and details["entities"]:
+                st.caption(f"🏷️ **识别实体**: {details['entities']}")
+
+
+def render_sources(response_text: str):
+    """提取并渲染来源链接"""
+    # 提取 Markdown 格式的链接
+    markdown_links = re.findall(r'\[([^\]]+)\]\(([^\)]+)\)', response_text)
+    
+    # 提取普通 URL
+    plain_urls = extract_urls_from_text(response_text)
+    
+    # 合并并去重
+    sources = []
+    seen_urls = set()
+    
+    # 优先使用 markdown 链接（有标题）
+    for title, url in markdown_links:
+        if url.startswith(('http://', 'https://')) and url not in seen_urls:
+            seen_urls.add(url)
+            sources.append({"title": title, "url": url})
+    
+    # 添加普通 URL
+    for url in plain_urls:
+        if url not in seen_urls:
+            seen_urls.add(url)
+            sources.append({"title": url[:50] + "..." if len(url) > 50 else url, "url": url})
+    
+    if sources:
+        st.markdown("### 📚 参考资料")
+        for src in sources:
+            st.markdown(f"""
+            <div class="source-card">
+                <a href="{src['url']}" target="_blank" style="text-decoration:none; color:#0366d6;">
+                    🔗 {src['title']}
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 def process_message(user_input: str):
-    """处理用户消息"""
-    if not st.session_state.agent:
-        st.error("Agent未初始化，请先初始化Agent")
+    """处理用户消息：实时状态更新 + 最终聚合展示"""
+    if not st.session_state.legal_flow or not st.session_state.core_agent:
+        st.error("LegalFlow未初始化，请先初始化系统")
         return
     
     try:
-        # 清空执行日志
-        st.session_state.execution_log = []
-        
-        # 添加用户消息到历史
+        # 1. 记录用户消息
         user_msg = {
             "role": "user",
             "content": user_input,
@@ -258,333 +492,85 @@ def process_message(user_input: str):
         with st.chat_message("user"):
             st.markdown(user_input)
         
-        # 处理消息
-        with st.chat_message("assistant"):
-            # 创建执行日志显示区域
-            log_container = st.container()
-            
-            # 运行异步函数
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            response = None
-            error_occurred = False
-            error_message = None
-            
+        # 2. 生成回复
+        # 创建状态显示容器
+        status_container = st.empty()
+        
+        # 创建异步循环
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        response = None
+        execution_logs = []
+        error_occurred = False
+        error_message = None
+        
+        # 创建状态更新回调函数（使用共享状态对象）
+        status_info = {"label": "🚀 系统启动中...", "message": "", "state": "running"}
+        
+        def status_callback(stage: str, message: str, state: str = "running"):
+            """状态更新回调函数"""
+            status_info["label"] = stage
+            status_info["message"] = message
+            status_info["state"] = state
+        
+        # 使用 st.status 进行实时状态更新
+        with status_container.status("🚀 系统启动中...", expanded=True) as status:
             try:
-                # 阶段1: 识别用户意图
-                stage_start = time.time()
-                log_execution_stage(
-                    "阶段1: 理解Query - 识别用户意图",
-                    "running",
-                    f"正在分析用户输入: '{user_input[:50]}...'",
-                    0,
-                    {"model": "LLM (qwen3-max)", "function": "intent_recognizer.recognize()"}
-                )
-                
-                conversation_history = [msg for msg in st.session_state.messages[-5:]]
-                intent = st.session_state.agent.intent_recognizer.recognize(
-                    user_input,
-                    st.session_state.agent.state,
-                    conversation_history
-                )
-                
-                elapsed = time.time() - stage_start
-                log_execution_stage(
-                    "阶段1: 理解Query - 识别用户意图",
-                    "success",
-                    f"识别结果: {intent}",
-                    elapsed,
-                    {"intent": intent, "model": "LLM (qwen3-max)"}
-                )
-                
-                # 阶段2: 检索相关记忆
-                stage_start = time.time()
-                log_execution_stage(
-                    "阶段2: 检索相关记忆",
-                    "running",
-                    "正在从向量数据库中检索相关记忆...",
-                    0,
-                    {"model": "Embedding (text-embedding-v4)", "function": "memory_manager.retrieve_relevant_memory()"}
-                )
-                
-                session_id = f"session_{len(st.session_state.agent.memory.messages)}"
-                relevant_memory = st.session_state.agent.memory_manager.retrieve_relevant_memory(
-                    user_input,
-                    session_id
-                )
-                
-                elapsed = time.time() - stage_start
-                memory_count = len(relevant_memory.get("long_term", [])) if isinstance(relevant_memory, dict) else 0
-                log_execution_stage(
-                    "阶段2: 检索相关记忆",
-                    "success",
-                    f"检索到 {memory_count} 条相关记忆",
-                    elapsed,
-                    {"memory_count": memory_count, "model": "Embedding (text-embedding-v4)"}
-                )
-                
-                # 阶段3: RAG检索（如果需要）
-                rag_result = None
-                needs_rag = st.session_state.agent._should_use_rag(user_input, intent)
-                if needs_rag:
-                    stage_start = time.time()
-                    rag_type = "legal" if st.session_state.agent._is_legal_query(user_input) else "web"
-                    log_execution_stage(
-                        f"阶段3: RAG检索 ({rag_type})",
-                        "running",
-                        f"正在使用{rag_type} RAG检索相关信息...",
-                        0,
-                        {"rag_type": rag_type, "model": "Embedding + LLM", "function": "rag_manager.retrieve_and_generate()"}
-                    )
-                    
-                    try:
-                        if rag_type == "legal":
-                            rag_result = st.session_state.agent.rag_manager.retrieve_and_generate(
-                                query=user_input,
-                                rag_type="legal",
-                                top_k=5
-                            )
-                        else:
-                            rag_result = st.session_state.agent.rag_manager.retrieve_and_generate(
-                                query=user_input,
-                                rag_type="web",
-                                top_k=5
-                            )
-                        
-                        elapsed = time.time() - stage_start
-                        source_count = len(rag_result.get("sources", [])) if rag_result else 0
-                        log_execution_stage(
-                            f"阶段3: RAG检索 ({rag_type})",
-                            "success",
-                            f"检索到 {source_count} 个来源",
-                            elapsed,
-                            {"rag_type": rag_type, "source_count": source_count, "answer_source": rag_result.get("answer_source") if rag_result else None}
-                        )
-                    except Exception as e:
-                        elapsed = time.time() - stage_start
-                        log_execution_stage(
-                            f"阶段3: RAG检索 ({rag_type})",
-                            "error",
-                            f"RAG检索失败: {str(e)}",
-                            elapsed,
-                            {"error": str(e)}
-                        )
-                
-                # 阶段4: 工具调用（如果需要）
-                stage_start = time.time()
-                log_execution_stage(
-                    "阶段4: 工具调用",
-                    "running",
-                    "正在判断是否需要调用工具...",
-                    0,
-                    {"function": "tool_selector.select_tools()"}
-                )
-                
-                # 调用process_message（内部会处理工具调用）
+                # 执行核心逻辑（传递回调函数）
+                # 由于Streamlit的限制，状态更新会在execute内部进行，但UI更新需要等待
                 response = loop.run_until_complete(
-                    st.session_state.agent.process_message(user_input)
+                    st.session_state.legal_flow.execute(user_input, status_callback)
                 )
                 
-                elapsed = time.time() - stage_start
+                # 确保有响应
+                if not response or response.strip() == "":
+                    response = "抱歉，系统未能生成有效回答。请稍后重试或咨询专业律师。"
+                    error_occurred = True
+                    error_message = "系统未能生成有效回答"
                 
-                # 检查是否使用了工具（从记忆中获取）
-                tools_used = []
-                tool_results_summary = []
-                if hasattr(st.session_state.agent, 'memory'):
-                    for msg in st.session_state.agent.memory.messages[-10:]:
-                        # 检查assistant消息中的tool_calls
-                        if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                            for tool_call in msg.tool_calls:
-                                if isinstance(tool_call, dict):
-                                    tool_name = tool_call.get('function', {}).get('name', '')
-                                    if tool_name:
-                                        tools_used.append(tool_name)
-                        # 检查tool消息（工具执行结果）
-                        if hasattr(msg, 'role') and (msg.role == 'tool' or (isinstance(msg.role, str) and msg.role == 'tool')):
-                            tool_name = getattr(msg, 'name', '') or ''
-                            tool_content = getattr(msg, 'content', '') or ''
-                            if tool_name:
-                                tools_used.append(tool_name)
-                                # 提取工具结果摘要
-                                if tool_content:
-                                    result_preview = tool_content[:100] + "..." if len(tool_content) > 100 else tool_content
-                                    tool_results_summary.append({
-                                        "tool": tool_name,
-                                        "result_preview": result_preview
-                                    })
+                # 提取执行日志
+                try:
+                    execution_logs = extract_execution_details_from_agent(st.session_state.core_agent)
+                except Exception as e:
+                    print(f"[WARNING] 提取执行日志失败: {e}")
+                    execution_logs = []
                 
-                if tools_used:
-                    unique_tools = list(set(tools_used))
-                    details = {
-                        "tools": unique_tools,
-                        "model": "LLM (qwen3-max)",
-                        "function": "toolcall.think() + toolcall.act()"
-                    }
-                    if tool_results_summary:
-                        details["tool_results"] = tool_results_summary
-                    log_execution_stage(
-                        "阶段4: 工具调用",
-                        "success",
-                        f"调用了工具: {', '.join(unique_tools)}",
-                        elapsed,
-                        details
-                    )
+                # 完成 - 显示最终状态
+                if not error_occurred:
+                    final_label = status_info.get("label", "✅ 回答生成完毕")
+                    status.update(label=final_label, state="complete", expanded=False)
                 else:
-                    log_execution_stage(
-                        "阶段4: 工具调用",
-                        "success",
-                        "无需调用工具",
-                        elapsed,
-                        {}
-                    )
-                
-                # 阶段5: 生成最终回复
-                stage_start = time.time()
-                log_execution_stage(
-                    "阶段5: 汇总输出 - 生成最终回复",
-                    "running",
-                    "正在使用LLM生成最终回复...",
-                    0,
-                    {"model": "LLM (qwen3-max)", "function": "_generate_response()"}
-                )
-                
-                # response已经在process_message中生成
-                elapsed = time.time() - stage_start
-                log_execution_stage(
-                    "阶段5: 汇总输出 - 生成最终回复",
-                    "success",
-                    f"生成回复成功，长度: {len(response)} 字符",
-                    elapsed,
-                    {"response_length": len(response), "model": "LLM (qwen3-max)"}
-                )
-                
-                # 阶段6: 保存记忆
-                stage_start = time.time()
-                log_execution_stage(
-                    "阶段6: 保存对话记忆",
-                    "running",
-                    "正在保存对话到记忆系统...",
-                    0,
-                    {"function": "memory_manager.save_conversation()"}
-                )
-                
-                # 记忆保存已经在process_message中完成
-                elapsed = time.time() - stage_start
-                log_execution_stage(
-                    "阶段6: 保存对话记忆",
-                    "success",
-                    "对话已保存到短期和长期记忆",
-                    elapsed,
-                    {}
-                )
+                    status.update(label="⚠️ 部分完成", state="error", expanded=False)
                 
             except TimeoutError as e:
                 error_occurred = True
-                error_message = f"⏱️ 超时错误: {str(e)}\n\n系统已自动重试，如果问题持续，请稍后再试。"
-                log_execution_stage(
-                    "错误处理",
-                    "error",
-                    f"超时错误: {str(e)}",
-                    0,
-                    {"error_type": "TimeoutError", "error": str(e)}
-                )
+                error_message = f"⏱️ 超时错误: {str(e)}"
+                response = "抱歉，处理超时。请稍后重试或咨询专业律师。"
+                status.update(label="❌ 执行超时", state="error")
             except Exception as e:
                 error_occurred = True
-                error_message = f"❌ 处理错误: {str(e)}\n\n系统已自动重试，如果问题持续，请检查网络连接或联系管理员。"
-                log_execution_stage(
-                    "错误处理",
-                    "error",
-                    f"处理错误: {str(e)}",
-                    0,
-                    {"error_type": type(e).__name__, "error": str(e)}
-                )
+                error_message = f"❌ 处理错误: {str(e)}"
+                response = f"抱歉，系统在处理您的问题时遇到了技术问题：{str(e)}。请稍后重试或咨询专业律师。"
+                status.update(label="❌ 发生错误", state="error")
+                import traceback
+                print(f"[ERROR] 处理消息时发生异常:")
+                traceback.print_exc()
             finally:
                 loop.close()
-            
-            # 显示执行日志
-            with log_container:
-                display_execution_log(st.session_state.execution_log)
-            
-            # 显示回复或错误
-            if error_occurred:
-                st.error(error_message)
-                if response:
-                    st.warning("⚠️ 部分回复已生成，但可能不完整：")
-                    st.markdown(response)
-            else:
-                # 显示回复
-                st.markdown(response)
-                
-                # 提取来源信息
-                sources = []
-                try:
-                    # 从回复文本中提取URL（包括markdown格式的链接）
-                    # 提取普通URL
-                    urls = extract_urls_from_text(response)
-                    for url in urls:
-                        sources.append({
-                            "type": "url",
-                            "url": url,
-                            "title": url[:50] + "..." if len(url) > 50 else url
-                        })
-                    
-                    # 提取markdown格式的链接 [title](url)
-                    markdown_link_pattern = r'\[([^\]]+)\]\(([^\)]+)\)'
-                    markdown_links = re.findall(markdown_link_pattern, response)
-                    for title, url in markdown_links:
-                        # 检查是否是http链接
-                        if url.startswith('http://') or url.startswith('https://'):
-                            # 提取snippet（如果回复中有相关信息）
-                            snippet = ""
-                            # 尝试从回复中找到相关的snippet
-                            url_index = response.find(url)
-                            if url_index > 0:
-                                # 获取URL前后的文本作为snippet
-                                start = max(0, url_index - 50)
-                                end = min(len(response), url_index + len(url) + 50)
-                                snippet = response[start:end].replace(url, "").strip()[:100]
-                            
-                            sources.append({
-                                "type": "url",
-                                "url": url,
-                                "title": title,
-                                "snippet": snippet
-                            })
-                    
-                    # 去重（基于URL）
-                    seen_urls = set()
-                    unique_sources = []
-                    for source in sources:
-                        url = source.get("url", "")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            unique_sources.append(source)
-                    sources = unique_sources
-                    
-                except Exception as e:
-                    print(f"Warning: Failed to extract sources: {e}")
-                
-                # 显示来源链接（在回复下方，如果有来源信息）
-                if sources:
-                    st.divider()
-                    display_sources(sources)
-                
-                # 添加回复到历史
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": response,
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
-                msg_idx = len(st.session_state.messages)
-                st.session_state.messages.append(assistant_msg)
-                
-                # 保存来源信息
-                if sources:
-                    st.session_state.sources[f"msg_{msg_idx}"] = sources
-                
-                # 更新系统信息
-                update_system_info()
+        
+        # 3. 保存助手消息到session_state（关键：在rerun之前保存）
+        if response:
+            assistant_msg = {
+                "role": "assistant",
+                "content": response,
+                "logs": execution_logs,
+                "error_occurred": error_occurred,
+                "error_message": error_message,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            st.session_state.messages.append(assistant_msg)
+            print(f"[DEBUG] 已保存助手消息到session_state，消息数: {len(st.session_state.messages)}")
     
     except Exception as e:
         st.error(f"处理消息时出错: {str(e)}")
@@ -593,192 +579,184 @@ def process_message(user_input: str):
             st.code(traceback.format_exc())
 
 
-def update_system_info():
-    """更新系统信息"""
-    if st.session_state.agent:
-        try:
-            # Agent状态
-            agent_state = st.session_state.agent.state.value if hasattr(st.session_state.agent.state, 'value') else str(st.session_state.agent.state)
-            
-            # 意图信息（从最近的消息中获取）
-            intent = "unknown"
-            if st.session_state.messages:
-                last_user_msg = None
-                for msg in reversed(st.session_state.messages):
-                    if msg["role"] == "user":
-                        last_user_msg = msg["content"]
-                        break
+def display_conversation():
+    """显示对话历史（包含执行流程）"""
+    if st.session_state.messages:
+        for idx, msg in enumerate(st.session_state.messages):
+            with st.chat_message(msg["role"]):
+                # 如果是assistant消息且有错误，先显示错误信息
+                if msg["role"] == "assistant" and msg.get("error_occurred"):
+                    st.error(msg.get("error_message", "处理过程中发生错误"))
+                    if msg.get("content"):
+                        st.warning("⚠️ 部分回复已生成，但可能不完整：")
                 
-                if last_user_msg:
-                    try:
-                        intent = st.session_state.agent.intent_recognizer.recognize(
-                            last_user_msg,
-                            st.session_state.agent.state,
-                            [m for m in st.session_state.messages[-5:]]
-                        )
-                    except:
-                        pass
-            
-            # 工具使用（从记忆中获取）
-            tools_used = []
-            if hasattr(st.session_state.agent, 'memory'):
-                for msg in st.session_state.agent.memory.messages[-10:]:
-                    # 检查assistant消息中的tool_calls
-                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        for tool_call in msg.tool_calls:
-                            if isinstance(tool_call, dict):
-                                tool_name = tool_call.get('function', {}).get('name', '')
-                                if tool_name:
-                                    tools_used.append(tool_name)
-                    # 检查tool消息
-                    if hasattr(msg, 'role') and (msg.role == 'tool' or (isinstance(msg.role, str) and msg.role == 'tool')):
-                        tool_name = getattr(msg, 'name', '') or ''
-                        if tool_name:
-                            tools_used.append(tool_name)
-            
-            # 记忆统计
-            short_term_count = len(st.session_state.agent.memory.messages) if hasattr(st.session_state.agent, 'memory') else 0
-            long_term_count = 0
-            try:
-                long_term_count = st.session_state.agent.memory_manager.vector_db.count_memories()
-            except:
-                pass
-            
-            st.session_state.system_info = {
-                "agent_state": agent_state,
-                "intent": intent,
-                "tools_used": list(set(tools_used)),
-                "memory_stats": {
-                    "short_term": short_term_count,
-                    "long_term": long_term_count
-                }
-            }
-        except Exception as e:
-            st.warning(f"更新系统信息时出错: {str(e)}")
+                # 显示消息内容
+                st.markdown(msg["content"])
+                if msg.get("timestamp"):
+                    st.caption(f"⏰ {msg['timestamp']}")
+                
+                # 如果是assistant消息，显示来源和执行流程
+                if msg["role"] == "assistant":
+                    # 显示来源链接
+                    if msg.get("content"):
+                        render_sources(msg["content"])
+                    
+                    # 显示完整执行流程（从保存的logs或重新提取）
+                    logs_to_display = msg.get("logs", [])
+                    
+                    # 如果没有保存的logs，尝试重新提取（仅针对最新的消息）
+                    if not logs_to_display and idx == len(st.session_state.messages) - 1:
+                        if st.session_state.core_agent:
+                            try:
+                                logs_to_display = extract_execution_details_from_agent(st.session_state.core_agent)
+                                # 保存提取的logs
+                                msg["logs"] = logs_to_display
+                            except Exception as e:
+                                print(f"Warning: Failed to extract logs: {e}")
+                    
+                    if logs_to_display:
+                        with st.expander("🕵️ 查看完整思维链与执行流程 (Full Process)", expanded=False):
+                            # 显示识别信息
+                            if st.session_state.core_agent and hasattr(st.session_state.core_agent, 'state_memory'):
+                                try:
+                                    mem = st.session_state.core_agent.state_memory.get()
+                                    domain = mem.get('domain', '未知')
+                                    intent = mem.get('intent', '未知')
+                                    entities = mem.get('entities', {})
+                                    
+                                    st.info(f"📋 **任务识别**: 领域 `{domain}` | 意图 `{intent}`")
+                                    
+                                    # 显示关键实体
+                                    if entities:
+                                        entity_parts = []
+                                        if entities.get("persons"):
+                                            entity_parts.append(f"👤 当事人: {', '.join(entities['persons'])}")
+                                        if entities.get("amounts"):
+                                            entity_parts.append(f"💰 金额: {', '.join(entities['amounts'])}")
+                                        if entities.get("dates"):
+                                            entity_parts.append(f"📅 时间: {', '.join(entities['dates'])}")
+                                        if entities.get("locations"):
+                                            entity_parts.append(f"📍 地点: {', '.join(entities['locations'])}")
+                                        if entity_parts:
+                                            st.caption(" | ".join(entity_parts))
+                                    
+                                    st.divider()
+                                except Exception as e:
+                                    print(f"Warning: Failed to display state memory: {e}")
+                            
+                            # 渲染时间轴（传递消息索引以确保key唯一）
+                            render_execution_timeline(logs_to_display, message_idx=idx)
+                    else:
+                        # 如果没有logs，显示一个提示
+                        with st.expander("🕵️ 查看完整思维链与执行流程 (Full Process)", expanded=False):
+                            st.info("📝 暂无执行细节（可能是旧消息或执行过程中出现异常）")
 
 
 def main():
     """主函数"""
-    # 标题
-    st.title("🤖 Agent System")
-    st.markdown("一个完整的智能Agent系统，包含工具系统、记忆系统、上下文管理、意图识别、RAG检索等功能")
+    st.title("⚖️ Legal Agent System")
+    st.markdown("多Agent法律助手系统 - 实时状态追踪 + 完整流程展示")
     
     # 侧边栏
     with st.sidebar:
-        st.header("⚙️ 系统设置")
+        st.header("⚙️ 控制台")
         
-        # 初始化Agent按钮
-        if st.button("🚀 初始化Agent", use_container_width=True):
-            with st.spinner("正在初始化Agent..."):
-                agent, error = init_agent()
-                if agent:
-                    st.session_state.agent = agent
-                    st.success("Agent初始化成功！")
-                    st.session_state.system_info = {}
-                    st.session_state.execution_log = []
-                    update_system_info()
+        # 初始化按钮
+        if st.button("🚀 初始化系统", use_container_width=True):
+            with st.spinner("正在加载模型..."):
+                legal_flow, core_agent, error = init_legal_flow()
+                if legal_flow and core_agent:
+                    st.session_state.legal_flow = legal_flow
+                    st.session_state.core_agent = core_agent
+                    st.success("✅ 系统就绪！")
                 else:
-                    st.error(f"Agent初始化失败: {error}")
+                    st.error(f"❌ 初始化失败: {error}")
         
-        # Agent状态
-        if st.session_state.agent:
-            st.success("✅ Agent已初始化")
+        # 系统状态
+        if st.session_state.legal_flow and st.session_state.core_agent:
+            st.success("✅ 系统已初始化")
+            
+            # 显示配置信息
+            with st.expander("📋 系统配置", expanded=False):
+                st.write("**LLM模型**: qwen-max")
+                st.write("**Embedding**: text-embedding-v4")
+                st.write("**工具选择**: Native Function Calling")
+                st.write("**最大步数**: 10步")
+            
             st.divider()
             
-            # 系统信息
-            display_system_info()
-            
             # 清空对话按钮
-            if st.button("🗑️ 清空对话", use_container_width=True):
+            if st.button("🗑️ 清空对话历史", use_container_width=True):
                 st.session_state.messages = []
                 st.session_state.conversation_history = []
-                st.session_state.sources = {}
-                st.session_state.execution_log = []
-                if st.session_state.agent:
-                    st.session_state.agent.memory.clear()
+                if st.session_state.core_agent:
+                    st.session_state.core_agent.memory.clear()
+                    if hasattr(st.session_state.core_agent, 'state_memory'):
+                        st.session_state.core_agent.state_memory.clear()
                 st.rerun()
             
-            # 重置Agent按钮
-            if st.button("🔄 重置Agent", use_container_width=True):
-                st.session_state.agent = None
+            # 重置系统按钮
+            if st.button("🔄 重置系统", use_container_width=True):
+                st.session_state.legal_flow = None
+                st.session_state.core_agent = None
                 st.session_state.messages = []
                 st.session_state.conversation_history = []
-                st.session_state.system_info = {}
-                st.session_state.sources = {}
-                st.session_state.execution_log = []
                 st.rerun()
         else:
-            st.warning("⚠️ Agent未初始化")
-            st.info("请点击上方按钮初始化Agent")
+            st.warning("⚠️ 系统未初始化")
+            st.info("请点击上方按钮初始化系统")
         
         st.divider()
         
-        # 配置信息
-        st.subheader("📋 配置信息")
-        st.write("**LLM模型**: qwen3-max")
-        st.write("**Embedding模型**: text-embedding-v4")
-        st.write("**向量数据库**: ChromaDB")
-        st.write("**LLM超时**: 120秒")
-        st.write("**Embedding超时**: 300秒")
-        
-        # 环境变量检查
+        # 环境检查
         st.subheader("🔍 环境检查")
         dashscope_key = os.getenv("DASHSCOPE_API_KEY", "未设置")
         if dashscope_key != "未设置":
-            st.success(f"✅ DASHSCOPE_API_KEY: {dashscope_key[:20]}...")
+            st.success(f"✅ API Key: {dashscope_key[:20]}...")
         else:
-            st.error("❌ DASHSCOPE_API_KEY未设置")
+            st.error("❌ DASHSCOPE_API_KEY 未设置")
     
     # 主界面
-    if not st.session_state.agent:
-        st.info("👈 请在侧边栏初始化Agent后开始对话")
+    if not st.session_state.legal_flow or not st.session_state.core_agent:
+        st.info("👈 请在侧边栏初始化系统后开始对话")
         st.markdown("""
-        ### 使用说明
+        ### 💡 使用说明
         
-        1. 点击侧边栏的"🚀 初始化Agent"按钮
-        2. 等待Agent初始化完成
-        3. 在下方输入框中输入问题
-        4. 查看Agent的回复和执行日志
+        1. 点击侧边栏的 "🚀 初始化系统" 按钮
+        2. 等待系统加载完成
+        3. 在下方输入框中输入法律相关问题
+        4. **查看实时状态**：系统会显示当前执行的阶段（意图识别、工具调用等）
+        5. **查看完整流程**：点击回答下方的"查看完整思维链"查看详细执行过程
         
-        ### 功能特性
+        ### ✨ 功能特性
         
-        - 💬 多轮对话：支持连续对话，保持上下文
-        - 🔍 意图识别：自动识别用户意图
-        - 🛠️ 工具调用：自动选择合适的工具
-        - 💾 记忆管理：短期记忆和长期记忆
-        - 📊 执行日志：详细显示每个阶段的执行过程和耗时
-        - 🔗 来源链接：显示信息来源，方便验证
+        - 🎯 **多Agent架构**: CoreAgent路由 + SpecializedAgent执行 + Critic评估
+        - 📊 **实时状态显示**: 显示当前执行阶段和进度
+        - 🔍 **智能识别**: 自动识别法律领域、意图和关键实体
+        - 💭 **完整流程追踪**: 展示每个think-act循环的详细步骤
+        - 🛠️ **复合搜索词**: 生成"法律术语+具体场景"的精准搜索词
+        - 📚 **来源链接**: 自动提取并展示参考资料链接
+        - 🕵️ **聚合详情页**: 在回答下方展示完整的决策过程
+        
+        ### 📖 支持的法律领域
+        
+        - 劳动法 (Labor_Law)
+        - 婚姻家事 (Family_Law)
+        - 合同纠纷 (Contract_Law)
+        - 公司法 (Corporate_Law)
+        - 刑法 (Criminal_Law)
+        - 程序性问题 (Procedural_Query)
         """)
     else:
         # 显示对话历史
         display_conversation()
         
         # 输入框
-        user_input = st.chat_input("请输入您的问题...")
+        user_input = st.chat_input("请输入您的法律问题...")
         
         if user_input:
             process_message(user_input)
             st.rerun()
-        
-        # 显示系统信息（在底部）
-        if st.session_state.system_info:
-            with st.expander("📊 详细系统信息", expanded=False):
-                display_system_info()
-                
-                # 显示最近的对话统计
-                if st.session_state.messages:
-                    st.subheader("📈 对话统计")
-                    user_count = sum(1 for m in st.session_state.messages if m["role"] == "user")
-                    assistant_count = sum(1 for m in st.session_state.messages if m["role"] == "assistant")
-                    st.write(f"用户消息: {user_count} 条")
-                    st.write(f"Agent回复: {assistant_count} 条")
-                    st.write(f"总计: {len(st.session_state.messages)} 条")
-                    
-                    # 显示最近的工具使用
-                    if st.session_state.system_info.get("tools_used"):
-                        st.subheader("🛠️ 工具使用历史")
-                        for tool in st.session_state.system_info["tools_used"]:
-                            st.write(f"- {tool}")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,18 @@ import os
 import json
 from datetime import datetime
 from .base import BaseTool
-from ..config.config import Config
+# 处理相对导入问题
+try:
+    from ..config.config import Config
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from config.config import Config
 
 
 class PythonExecutorTool(BaseTool):
@@ -84,6 +95,31 @@ class PythonExecutorTool(BaseTool):
                 os.unlink(temp_file)
             except:
                 pass
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "要执行的Python代码"
+                        }
+                    },
+                    "required": ["code"]
+                }
+            }
+        }
 
 
 class CalculatorTool(BaseTool):
@@ -142,6 +178,31 @@ class CalculatorTool(BaseTool):
                 "result": None,
                 "error": f"Calculation error: {str(e)}"
             }
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "expression": {
+                            "type": "string",
+                            "description": "数学表达式（如：100 + 200 * 3）"
+                        }
+                    },
+                    "required": ["expression"]
+                }
+            }
+        }
 
 
 class FileReadTool(BaseTool):
@@ -213,6 +274,35 @@ class FileReadTool(BaseTool):
                 "content": "",
                 "error": f"Error reading file: {str(e)}"
             }
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "要读取的文件路径"
+                        },
+                        "max_lines": {
+                            "type": "integer",
+                            "description": "最大读取行数（可选，如果不提供则读取整个文件）"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            }
+        }
 
 
 class DateTimeTool(BaseTool):
@@ -260,4 +350,29 @@ class DateTimeTool(BaseTool):
                 "timestamp": now.timestamp(),
                 "iso_format": now.isoformat()
             }
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "format": {
+                            "type": "string",
+                            "description": "日期时间格式字符串（可选，如：%Y-%m-%d %H:%M:%S）"
+                        }
+                    },
+                    "required": []
+                }
+            }
+        }
 

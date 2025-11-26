@@ -1,198 +1,183 @@
-"""Web检索工具（Google搜索）"""
-from typing import Dict, Any, List, Optional
+"""博查 (Bocha) 搜索工具 - 专为中文互联网设计"""
 import requests
-from bs4 import BeautifulSoup
-from .base import BaseTool
-from ..config.config import Config
+import json
+import os
+from typing import Dict, Any, List
+# 处理相对导入问题
+try:
+    from .base import BaseTool
+    from ..config.config import Config
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from tools.base import BaseTool
+    from config.config import Config
 
 
 class WebSearchTool(BaseTool):
-    """Web检索工具，用于搜索网络信息（Google搜索）"""
+    """
+    博查 (Bocha) 搜索工具
+    
+    专为中文互联网设计，能直接返回高质量的内容摘要和来源链接。
+    对于大多数查询，不需要额外的 url_reader 即可获取足够信息。
+    
+    优势：
+    - 后端预读取和清洗网页内容
+    - 开启summary=True时返回信息密度极高的内容摘要
+    - 包含核心事实、数据和逻辑
+    """
     
     def __init__(self, config: Config):
         """
-        初始化Web检索工具
+        初始化博查搜索工具
         
         Args:
             config: 系统配置
         """
         super().__init__(
             name="web_search",
-            description="Search the web for information using Google search. Use this tool when you need to find current information, facts, or data from the internet."
+            description=(
+                "搜索中文互联网信息。当需要查询事实、法律法规、案例分析或新闻时使用。"
+                "返回结果包含详细摘要和来源链接。"
+                "该工具返回的摘要已经足够详细，通常不需要额外的URL阅读工具。"
+            )
         )
         self.config = config
-        self.max_results = config.web_search_max_results
         
-        # Google搜索API配置（可以使用Google Custom Search API或爬虫方式）
-        self.google_api_key = None  # 从环境变量或配置中获取
-        self.google_cx = None  # Google Custom Search Engine ID
-        self._initialize_google_search()
+        # 博查 API Key（优先从config获取，然后从环境变量）
+        self.api_key = (
+            getattr(config, 'bocha_api_key', None) or
+            os.getenv("BOCHA_API_KEY") or
+            "sk-abc3ef836fd9487c867cc58df5f76c31"  # 默认API Key（建议后续放入环境变量）
+        )
+        
+        # 博查 API 端点
+        self.api_url = "https://api.bochaai.com/v1/web-search"
+        
+        # 最大结果数
+        self.max_results = getattr(config, 'web_search_max_results', 8)
     
-    def _initialize_google_search(self):
-        """初始化Google搜索配置"""
-        import os
-        self.google_api_key = os.getenv("GOOGLE_API_KEY")
-        self.google_cx = os.getenv("GOOGLE_CX")
-    
-    def execute(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, user_input: str, context: Dict[str, Any] = None) -> str:
         """
-        执行Web搜索
+        执行搜索
         
         Args:
-            user_input: 用户输入（包含搜索关键词）
+            user_input: 搜索关键词 (Query)
             context: 上下文信息（可包含max_results等参数）
             
         Returns:
-            搜索结果字典，包含results, query等
+            格式化后的文本，包含标题、URL和长摘要
         """
-        # 提取搜索关键词
         query = user_input.strip()
         if not query:
-            return {
-                "query": query,
-                "results": [],
-                "error": "Empty query"
-            }
+            return "Error: Empty search query"
         
-        # 获取最大结果数
-        max_results = context.get("max_results", self.max_results)
+        # 从context获取max_results，如果没有则使用默认值
+        max_results = context.get("max_results", self.max_results) if context else self.max_results
         
-        # 尝试使用Google Custom Search API
-        if self.google_api_key and self.google_cx:
-            try:
-                return self._search_with_google_api(query, max_results)
-            except Exception as e:
-                print(f"Warning: Google API search failed: {e}, trying alternative method")
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         
-        # 如果API不可用，使用爬虫方式（需要实现）
-        try:
-            return self._search_with_scraper(query, max_results)
-        except Exception as e:
-            return {
-                "query": query,
-                "results": [],
-                "error": f"Search failed: {str(e)}"
-            }
-    
-    def _search_with_google_api(
-        self,
-        query: str,
-        max_results: int = 5
-    ) -> Dict[str, Any]:
-        """
-        使用Google Custom Search API搜索
-        
-        Args:
-            query: 搜索关键词
-            max_results: 最大结果数
-            
-        Returns:
-            搜索结果字典
-        """
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {
-            "key": self.google_api_key,
-            "cx": self.google_cx,
-            "q": query,
-            "num": min(max_results, 10)  # Google API最多返回10个结果
+        # 构造请求体
+        payload = {
+            "query": query,
+            "freshness": "noLimit",  # 时间限制：noLimit, oneDay, oneWeek, oneMonth, oneYear
+            "summary": True,         # 关键点：开启长摘要，替代 url_reader 的部分功能
+            "count": max_results     # 返回结果数量
         }
         
         try:
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
+            # 发起请求
+            response = requests.post(self.api_url, json=payload, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                return f"Error: Search API returned status code {response.status_code}"
+            
             data = response.json()
             
-            # 解析搜索结果
-            results = []
-            if "items" in data:
-                for item in data["items"][:max_results]:
-                    result = {
-                        "title": item.get("title", ""),
-                        "url": item.get("link", ""),
-                        "snippet": item.get("snippet", ""),
-                        "display_url": item.get("displayLink", "")
-                    }
-                    results.append(result)
+            # 检查业务状态码
+            if data.get("code") != 200:
+                return f"Error: {data.get('msg', 'Unknown error')}"
             
-            return {
-                "query": query,
-                "results": results,
-                "total_results": data.get("searchInformation", {}).get("totalResults", "0")
-            }
-        except Exception as e:
-            raise RuntimeError(f"Google API search failed: {str(e)}")
-    
-    def _search_with_scraper(
-        self,
-        query: str,
-        max_results: int = 5
-    ) -> Dict[str, Any]:
-        """
-        使用爬虫方式搜索（备用方案）
-        
-        Args:
-            query: 搜索关键词
-            max_results: 最大结果数
+            # 提取网页数据
+            web_pages = data.get("data", {}).get("webPages", {}).get("value", [])
             
-        Returns:
-            搜索结果字典
-        """
-        # 注意：直接爬取Google搜索结果可能违反服务条款
-        # 这里提供一个框架，实际使用时建议使用Google Custom Search API
-        
-        # 构建Google搜索URL
-        search_url = f"https://www.google.com/search?q={requests.utils.quote(query)}&num={max_results}"
-        
-        # 设置请求头
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        
-        try:
-            response = requests.get(search_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            # 解析HTML
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # 提取搜索结果（Google的HTML结构可能会变化）
-            results = []
-            search_results = soup.find_all('div', class_='g')[:max_results]
-            
-            for result in search_results:
-                title_elem = result.find('h3')
-                link_elem = result.find('a')
-                snippet_elem = result.find('span', class_='aCOpRe')
+            if not web_pages:
+                return f"No results found for query: {query}"
                 
-                if title_elem and link_elem:
-                    result_data = {
-                        "title": title_elem.get_text(),
-                        "url": link_elem.get('href', ''),
-                        "snippet": snippet_elem.get_text() if snippet_elem else ""
-                    }
-                    results.append(result_data)
+            return self._format_results(query, web_pages)
             
-            return {
-                "query": query,
-                "results": results
-            }
+        except requests.exceptions.Timeout:
+            return "Error: Search request timeout. Please try again later."
+        except requests.exceptions.RequestException as e:
+            return f"Error: Network error - {str(e)}"
         except Exception as e:
-            raise RuntimeError(f"Scraper search failed: {str(e)}")
+            return f"Search failed: {str(e)}"
     
-    def search_simple(
-        self,
-        query: str,
-        max_results: int = 5
-    ) -> List[Dict[str, Any]]:
+    def _format_results(self, query: str, results: List[Dict[str, Any]]) -> str:
         """
-        简单搜索接口（返回结果列表）
+        将 JSON 数据格式化为 LLM 和人类都易读的文本
         
         Args:
-            query: 搜索关键词
-            max_results: 最大结果数
+            query: 搜索查询
+            results: 搜索结果列表
             
         Returns:
-            搜索结果列表
+            格式化的结果字符串
         """
-        result = self.execute(query, {"max_results": max_results})
-        return result.get("results", [])
+        parts = [f"Search results for '{query}':\n"]
+        
+        for i, item in enumerate(results, 1):
+            title = item.get("name", "No Title")
+            url = item.get("url", "No URL")
+            # 优先使用 summary (长摘要)，如果没有则使用 snippet (短摘要)
+            content = item.get("summary") or item.get("snippet") or "No content available."
+            
+            # 发布时间 (如果有)
+            date_published = item.get("datePublished", "")
+            time_info = f" (Time: {date_published})" if date_published else ""
+            
+            parts.append(f"Result {i}:")
+            parts.append(f"Title: {title}{time_info}")
+            parts.append(f"Source: {url}")  # 明确标注 Source，方便 LLM 引用
+            parts.append(f"Content: {content}")
+            parts.append("-" * 30)  # 分隔符
+        
+        return "\n".join(parts)
+    
+    def to_schema(self) -> Dict[str, Any]:
+        """
+        将工具转换为OpenAI格式的JSON Schema
+        
+        Returns:
+            OpenAI格式的工具定义字典
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索关键词或查询字符串"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "最大返回结果数量（可选，默认8）",
+                            "default": self.max_results
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        }

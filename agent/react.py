@@ -2,8 +2,20 @@
 from abc import abstractmethod
 from typing import Optional
 from .base import BaseAgent
-from ..schema import AgentState, Memory
-from ..config.config import Config
+# 处理相对导入问题
+try:
+    from ..schema import AgentState, Memory
+    from ..config.config import Config
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from schema import AgentState, Memory
+    from config.config import Config
 
 
 class ReActAgent(BaseAgent):
@@ -14,6 +26,7 @@ class ReActAgent(BaseAgent):
         name: str,
         description: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        next_step_prompt: Optional[str] = None,
         config: Optional[Config] = None,
         memory: Optional[Memory] = None,
         state: AgentState = AgentState.IDLE,
@@ -26,6 +39,7 @@ class ReActAgent(BaseAgent):
             name: Agent名称
             description: Agent描述
             system_prompt: 系统提示词
+            next_step_prompt: 下一步提示词
             config: 系统配置
             memory: 记忆存储
             state: Agent状态
@@ -35,6 +49,7 @@ class ReActAgent(BaseAgent):
             name=name,
             description=description,
             system_prompt=system_prompt,
+            next_step_prompt=next_step_prompt,
             config=config,
             memory=memory,
             state=state,
@@ -76,4 +91,3 @@ class ReActAgent(BaseAgent):
         
         # 行动阶段
         return await self.act()
-

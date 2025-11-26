@@ -1,16 +1,28 @@
 """最终的Agent类"""
 from typing import Optional, Dict, Any
 from .toolcall import ToolCallAgent
-from ..schema import AgentState, Memory
-from ..config.config import Config
-from ..tools.tool_manager import ToolManager
-from ..memory.memory_manager import MemoryManager
-from ..context.manager import ContextManager
-from ..intent.recognizer import IntentRecognizer
-from ..intent.state_tracker import StateTracker
-from ..reflection.self_reflection import SelfReflection
-from ..llm.llm import LLM
-from ..rag.rag_manager import RAGManager
+# 处理相对导入问题
+try:
+    from ..schema import AgentState, Memory
+    from ..config.config import Config
+    from ..tools.tool_manager import ToolManager
+    from ..memory.memory_manager import MemoryManager
+    from ..memory.manager import ContextManager
+    from ..models.llm import LLM
+except (ImportError, ValueError):
+    # 如果相对导入失败，使用绝对导入
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from schema import AgentState, Memory
+    from config.config import Config
+    from tools.tool_manager import ToolManager
+    from memory.memory_manager import MemoryManager
+    from memory.manager import ContextManager
+    from models.llm import LLM
 
 
 class Agent(ToolCallAgent):
@@ -21,10 +33,11 @@ class Agent(ToolCallAgent):
         name: str = "agent",
         description: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        next_step_prompt: Optional[str] = None,
         config: Optional[Config] = None,
         memory: Optional[Memory] = None,
         state: AgentState = AgentState.IDLE,
-        max_steps: int = 30
+        max_steps: int = 10
     ):
         """
         初始化Agent
@@ -33,6 +46,7 @@ class Agent(ToolCallAgent):
             name: Agent名称
             description: Agent描述
             system_prompt: 系统提示词
+            next_step_prompt: 下一步提示词
             config: 系统配置
             memory: 记忆存储
             state: Agent状态
@@ -44,11 +58,7 @@ class Agent(ToolCallAgent):
         
         self.memory_manager = MemoryManager(config)
         self.context_manager = ContextManager(config)
-        self.intent_recognizer = IntentRecognizer(config)
-        self.state_tracker = StateTracker(config)
-        self.self_reflection = SelfReflection(config)
         self.llm = LLM(config)
-        self.rag_manager = RAGManager(config)
         
         # 初始化工具管理器
         tool_manager = ToolManager(config)
@@ -58,6 +68,7 @@ class Agent(ToolCallAgent):
             name=name,
             description=description or "A comprehensive agent with full capabilities",
             system_prompt=system_prompt,
+            next_step_prompt=next_step_prompt,
             config=config,
             memory=memory,
             state=state,
@@ -75,16 +86,8 @@ class Agent(ToolCallAgent):
         Returns:
             Agent回复
         """
-        # 1. 识别用户意图
-        conversation_history = [msg.to_dict() for msg in self.memory.messages]
-        intent = self.intent_recognizer.recognize(
-            user_message,
-            self.state,
-            conversation_history
-        )
-        
-        # 2. 更新状态追踪
-        self.state_tracker.update_state(self, user_message, intent)
+        # 1. 使用Agent的memory和state进行状态维护
+        # memory已经通过继承的BaseAgent管理，state通过AgentState管理
         
         # 3. 检索相关记忆
         # 使用memory的messages作为session标识
@@ -94,71 +97,13 @@ class Agent(ToolCallAgent):
             session_id
         )
         
-        # 3.5. 根据意图决定是否使用RAG检索
-        rag_result = None
-        if intent in ["query", "task"]:
-            # 判断是否需要RAG检索（法律问题或需要实时信息）
-            needs_rag = self._should_use_rag(user_message, intent)
-            if needs_rag:
-                try:
-                    # 优先使用法律库RAG（如果有法律关键词）
-                    if self._is_legal_query(user_message):
-                        rag_result = self.rag_manager.retrieve_and_generate(
-                            query=user_message,
-                            rag_type="legal",
-                            top_k=5
-                        )
-                    else:
-                        # 使用Web RAG（需要实时信息）
-                        rag_result = self.rag_manager.retrieve_and_generate(
-                            query=user_message,
-                            rag_type="web",
-                            top_k=5
-                        )
-                except Exception as e:
-                    print(f"Warning: RAG retrieval failed: {e}")
-        
         # 4. 管理上下文
         conversation_history = [msg.to_dict() for msg in self.memory.messages]
-        
-        # 如果有RAG结果，添加到relevant_memory中
-        if rag_result and rag_result.get("answer"):
-            # relevant_memory是字典，包含long_term和short_term
-            if isinstance(relevant_memory, dict):
-                # 将RAG结果添加到long_term记忆中
-                if "long_term" not in relevant_memory:
-                    relevant_memory["long_term"] = []
-                relevant_memory["long_term"].append({
-                    "content": rag_result["answer"],
-                    "metadata": {
-                        "type": "rag_result",
-                        "source": rag_result.get("answer_source", "unknown")
-                    },
-                    "score": 1.0  # RAG结果的相关度设为1.0
-                })
-            else:
-                # 如果relevant_memory不是字典，转换为字典格式
-                relevant_memory = {
-                    "long_term": [relevant_memory] if relevant_memory else [],
-                    "short_term": []
-                }
-                relevant_memory["long_term"].append({
-                    "content": rag_result["answer"],
-                    "metadata": {
-                        "type": "rag_result",
-                        "source": rag_result.get("answer_source", "unknown")
-                    },
-                    "score": 1.0
-                })
         
         context = self.context_manager.get_context(
             conversation_history,
             relevant_memory
         )
-        
-        # 如果有RAG结果，添加到context中
-        if rag_result:
-            context["rag_result"] = rag_result
         
         # 5. 运行Agent（思考-行动循环）
         # 确保状态为IDLE（run方法需要）
@@ -175,7 +120,6 @@ class Agent(ToolCallAgent):
             response = self._generate_response(
                 user_message=user_message,
                 context=context,
-                intent=intent,
                 tool_results=tool_results
             )
         except TimeoutError as e:
@@ -184,7 +128,6 @@ class Agent(ToolCallAgent):
                 response = self._generate_response(
                     user_message=user_message,
                     context=context,
-                    intent=intent,
                     tool_results=tool_results
                 )
             except Exception as retry_error:
@@ -193,28 +136,19 @@ class Agent(ToolCallAgent):
             response = f"抱歉，生成回复时遇到错误: {str(e)}。请稍后重试。"
         
         # 7.5. 判断是否为专业回答（基于文档/法律条文）
-        is_professional = self._is_professional_answer(response, context, tool_results)
-        if is_professional:
-            self.state = AgentState.PROFESSIONAL_ANSWER
+        # TODO: 实现更专业的判断逻辑
+        # is_professional = self._is_professional_answer(response, context, tool_results)
+        # if is_professional:
+        #     self.state = AgentState.PROFESSIONAL_ANSWER
         
-        # 8. Self-reflection（可选）
-        if self.config.reflection_enabled:
-            reflection_result = self.self_reflection.reflect(
-                user_message,
-                response,
-                {},
-                self
-            )
-            if reflection_result.get("should_improve"):
-                # TODO: 根据反思结果改进回复
-                pass
+        # 8. Agent的think过程已经包含了反思机制（通过react循环）
         
         # 9. 保存对话到记忆
         self.memory_manager.save_conversation(
             session_id,
             user_message,
             response,
-            intent
+            "query"  # 默认意图类型
         )
         
         # 9. 保存精炼后的上下文到长期记忆（如果有）
@@ -229,19 +163,6 @@ class Agent(ToolCallAgent):
         
         # 10. 添加来源信息到回复中（供前端显示）
         sources_info = []
-        
-        # 从RAG结果中提取来源
-        if rag_result and rag_result.get("sources"):
-            for source in rag_result["sources"]:
-                if isinstance(source, dict):
-                    url = source.get("url", "")
-                    title = source.get("title", "")
-                    if url:
-                        sources_info.append({
-                            "url": url,
-                            "title": title or url[:50] + "..." if len(url) > 50 else url,
-                            "snippet": source.get("snippet", "")[:100]
-                        })
         
         # 从工具执行结果中提取URL（如果工具返回了URL）
         if tool_results and isinstance(tool_results, str):
@@ -283,7 +204,6 @@ class Agent(ToolCallAgent):
         self,
         user_message: str,
         context: Dict[str, Any],
-        intent: str,
         tool_results: str
     ) -> str:
         """
@@ -299,35 +219,23 @@ class Agent(ToolCallAgent):
             Agent回复
         """
         # 构建系统提示词（增强版，避免幻觉）
-        system_prompt = self.system_prompt or """你是一个专业的AI助手，特别擅长法律相关问题的回答。请根据用户的问题和上下文信息，提供准确、完整、有帮助的回答。
-
-**重要约束**：
-1. **基于文档回答**：如果提供了相关文档、法律条文或检索到的信息，必须严格基于这些信息回答，不得编造或推测
-2. **无法回答时明确说明**：如果无法从提供的文档或信息中找到答案，必须明确说明"根据提供的文档，无法找到相关信息"或"无法回答此问题"
-3. **引用来源**：如果使用了文档、法律条文或网络搜索结果，必须明确引用来源
-4. **区分专业回答和一般回答**：
-   - 专业回答（法律条文、案例等）：必须基于检索到的文档，明确标注来源
-   - 一般回答：可以基于常识和知识，但要说明这是基于一般知识
-5. **禁止幻觉**：严禁编造法律条文、案例或事实，如果不知道，必须说明
-
-**回答格式**：
-- 如果基于文档：开头说明"根据检索到的文档/法律条文..."
-- 如果无法回答：明确说明"无法回答"或"未找到相关信息"
-- 如果是一般回答：说明"基于一般知识..."
-
-要求：
-1. 回答要准确、完整、专业
-2. 如果使用了工具，请整合工具结果并说明来源
-3. 如果上下文中有相关信息，请引用
-4. 使用清晰、易懂的语言
-5. 如果无法回答，请明确说明"""
+        try:
+            from ..prompt.agent_prompts import AGENT_SYSTEM_PROMPT
+        except (ImportError, ValueError):
+            # 如果相对导入失败，使用绝对导入
+            import sys
+            from pathlib import Path
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent
+            if str(project_root) not in sys.path:
+                sys.path.insert(0, str(project_root))
+            from prompt.agent_prompts import AGENT_SYSTEM_PROMPT
+        system_prompt = self.system_prompt or AGENT_SYSTEM_PROMPT
         
         # 构建用户消息
         user_prompt_parts = [f"用户问题：{user_message}"]
         
-        # 添加意图信息
-        if intent:
-            user_prompt_parts.append(f"用户意图：{intent}")
+        # 意图信息已通过Agent的think过程处理
         
         # 添加上下文信息
         if context.get("recent_messages"):
@@ -359,18 +267,6 @@ class Agent(ToolCallAgent):
         if tool_results and tool_results != "No steps executed":
             user_prompt_parts.append(f"\n工具执行结果：{tool_results}")
         
-        # 添加RAG结果（如果有）
-        if context.get("rag_result"):
-            rag_result = context["rag_result"]
-            if rag_result.get("answer"):
-                user_prompt_parts.append(f"\n检索到的信息：{rag_result['answer']}")
-                if rag_result.get("sources"):
-                    user_prompt_parts.append(f"\n信息来源：")
-                    for source in rag_result["sources"][:3]:
-                        if isinstance(source, dict):
-                            source_text = source.get("url", "") or source.get("title", "") or str(source)
-                            user_prompt_parts.append(f"- {source_text}")
-        
         # 添加答案来源要求
         user_prompt_parts.append("\n**请根据以上信息回答，并明确说明：**")
         user_prompt_parts.append("1. 答案来源（基于文档/网络搜索/知识库/一般知识/无法回答）")
@@ -401,87 +297,88 @@ class Agent(ToolCallAgent):
         except Exception as e:
             return f"生成回复时出错: {str(e)}"
     
-    def _is_professional_answer(
-        self,
-        response: str,
-        context: Dict[str, Any],
-        tool_results: str
-    ) -> bool:
-        """
-        判断是否为专业回答（基于文档/法律条文）
-        
-        Args:
-            response: Agent回复
-            context: 上下文信息
-            tool_results: 工具执行结果
-            
-        Returns:
-            是否为专业回答
-        """
-        # 检查回复中是否包含文档引用
-        professional_keywords = [
-            "根据文档", "根据法律条文", "根据检索", "根据案例",
-            "法律条文", "法律规定", "法条", "案例", "判决",
-            "来源：", "参考：", "依据："
-        ]
-        
-        response_lower = response.lower()
-        if any(keyword in response_lower for keyword in professional_keywords):
-            return True
-        
-        # 检查是否使用了RAG检索
-        if context.get("long_term_memory") or context.get("refined_context"):
-            return True
-        
-        # 检查工具结果中是否包含文档内容
-        if tool_results and ("document" in tool_results.lower() or "法律" in tool_results):
-            return True
-        
-        return False
+    # TODO: 实现更专业的判断逻辑
+    # def _is_professional_answer(
+    #     self,
+    #     response: str,
+    #     context: Dict[str, Any],
+    #     tool_results: str
+    # ) -> bool:
+    #     """
+    #     判断是否为专业回答（基于文档/法律条文）
+    #     
+    #     Args:
+    #         response: Agent回复
+    #         context: 上下文信息
+    #         tool_results: 工具执行结果
+    #         
+    #     Returns:
+    #         是否为专业回答
+    #     """
+    #     pass
     
-    def _should_use_rag(self, user_message: str, intent: str) -> bool:
-        """
-        判断是否应该使用RAG检索
-        
-        Args:
-            user_message: 用户消息
-            intent: 用户意图
-            
-        Returns:
-            是否应该使用RAG
-        """
-        # 如果是查询意图，检查是否需要实时信息或法律信息
-        if intent == "query":
-            # 检查是否包含实时信息关键词
-            realtime_keywords = ["天气", "今天", "现在", "最新", "实时", "当前"]
-            if any(keyword in user_message for keyword in realtime_keywords):
-                return True
-            
-            # 检查是否包含法律关键词
-            if self._is_legal_query(user_message):
-                return True
-        
-        # 如果是任务意图，可能需要搜索信息
-        if intent == "task":
-            task_keywords = ["搜索", "查找", "查询", "获取", "检索"]
-            if any(keyword in user_message for keyword in task_keywords):
-                return True
-        
-        return False
+    # TODO: 实现更智能的工具使用判断逻辑（如果需要）
+    # def _should_use_tool(self, user_message: str, intent: str) -> bool:
+    #     """
+    #     判断是否应该使用特定工具
+    #     
+    #     Args:
+    #         user_message: 用户消息
+    #         intent: 用户意图
+    #         
+    #     Returns:
+    #         是否应该使用工具
+    #     """
+    #     pass
     
-    def _is_legal_query(self, user_message: str) -> bool:
+    # TODO: 实现更准确的法律查询判断逻辑
+    # def _is_legal_query(self, user_message: str) -> bool:
+    #     """
+    #     判断是否为法律相关查询
+    #     
+    #     Args:
+    #         user_message: 用户消息
+    #         
+    #     Returns:
+    #         是否为法律查询
+    #     """
+    #     pass
+    
+    async def think(self) -> bool:
         """
-        判断是否为法律相关查询
+        思考阶段：处理当前状态并决定下一步行动（参考manus.py）
         
-        Args:
-            user_message: 用户消息
-            
         Returns:
-            是否为法律查询
+            是否需要执行行动
         """
-        legal_keywords = [
-            "法律", "法条", "法规", "条例", "规定", "条款", "合同",
-            "诉讼", "判决", "案例", "律师", "法院", "司法", "立法"
-        ]
-        return any(keyword in user_message for keyword in legal_keywords)
+        # TODO: MCP连接逻辑（如果需要）
+        # if not self._initialized:
+        #     await self.initialize_mcp_servers()
+        #     self._initialized = True
+        
+        # TODO: 可以在这里添加browser context helper逻辑（如果需要）
+        # original_prompt = self.next_step_prompt
+        # recent_messages = self.memory.messages[-3:] if self.memory.messages else []
+        # browser_in_use = any(...)
+        # if browser_in_use:
+        #     self.next_step_prompt = await self.browser_context_helper.format_next_step_prompt()
+        
+        # 调用父类的think方法
+        result = await super().think()
+        
+        # TODO: 恢复原始prompt（如果需要）
+        # self.next_step_prompt = original_prompt
+        
+        return result
+    
+    async def initialize_mcp_servers(self) -> None:
+        """
+        初始化MCP服务器连接（如果需要）
+        
+        TODO: 实现MCP服务器连接逻辑
+        MCP (Model Context Protocol) 可以通过SSE或stdio连接到MCP服务器，
+        并使用服务器提供的工具。如果MCP服务器提供web_browser相关工具，
+        可以通过connect_mcp_server方法连接并添加这些工具。
+        """
+        pass
 
