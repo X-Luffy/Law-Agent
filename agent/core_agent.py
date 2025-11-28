@@ -74,7 +74,17 @@ class CoreAgent(Agent):
         )
         
         # 领域分类器（使用LLM）
-        self.domain_classifier = LLM(config or Config())
+        # 为CoreAgent创建单独的配置，使用qwen-flash以提高路由速度
+        core_config = config or Config()
+        if core_config.llm_model == "qwen-max":
+            # 如果使用默认配置，改为qwen-flash以提高速度
+            core_config = Config()
+            core_config.llm_model = "qwen-flash"
+            # 复制其他配置
+            if config:
+                core_config.llm_api_key = config.llm_api_key
+                core_config.llm_base_url = config.llm_base_url
+        self.domain_classifier = LLM(core_config)
         
         # 子Agent字典（按domain+intent分类）- 保留以兼容旧方法
         self.sub_agents: Dict[str, Agent] = {}
