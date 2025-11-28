@@ -110,7 +110,7 @@ if "messages" not in st.session_state:
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 def init_legal_flow():
-    """初始化LegalFlow（多Agent法律系统）
+    """初始化LegalFlow（多Agent法律系统 - 中心化记忆管理）
     
     从环境变量中读取配置：
     - DASHSCOPE_API_KEY: LLM和Embedding的API Key
@@ -125,8 +125,10 @@ def init_legal_flow():
         if not config.llm_api_key:
             return None, None, "LLM API Key未设置，请设置环境变量 DASHSCOPE_API_KEY"
         
-        core_agent = CoreAgent(config=config)
-        legal_flow = LegalFlow(core_agent=core_agent, config=config)
+        # LegalFlow会自动创建CoreAgent（无状态）
+        legal_flow = LegalFlow(config=config)
+        # 获取core_agent用于前端显示（兼容性）
+        core_agent = legal_flow.core_agent
         return legal_flow, core_agent, None
     except Exception as e:
         return None, None, str(e)
@@ -159,183 +161,46 @@ def log_execution_step(
     }
 
 
-def extract_execution_details_from_agent(core_agent: CoreAgent) -> List[Dict[str, Any]]:
-    """从Agent的memory中提取详细的执行信息（包括子Agent的执行步骤）"""
+def extract_execution_details_from_agent(legal_flow: LegalFlow) -> List[Dict[str, Any]]:
+    """从LegalFlow的memory中提取详细的执行信息（中心化记忆管理）"""
     log_entries = []
     
     try:
-        # 首先尝试从子Agent的memory中提取（更详细）
-        if hasattr(core_agent, 'sub_agents') and core_agent.sub_agents:
-            print(f"[DEBUG] Found {len(core_agent.sub_agents)} sub_agents")
-            # 获取最近使用的子Agent（通常是最后一个）
-            sub_agent_list = list(core_agent.sub_agents.items())
-            if sub_agent_list:
-                # 使用最后一个子Agent（最近使用的）
-                agent_key, sub_agent = sub_agent_list[-1]
-                print(f"[DEBUG] 从子Agent提取日志: {agent_key}")
-                
-                if hasattr(sub_agent, 'memory') and sub_agent.memory and hasattr(sub_agent.memory, 'messages'):
-                    messages = sub_agent.memory.messages
-                    print(f"[DEBUG] 子Agent memory消息数: {len(messages)}")
-                    current_step = 0
-                    
-                    for i, msg in enumerate(messages):
-                        # 检查是否是assistant消息（包含think内容或tool_calls）
-                        if hasattr(msg, 'role') and msg.role == 'assistant':
-                            # 检查是否有tool_calls
-                            if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                                # 这是一个think步骤，产生了tool_calls
-                                current_step += 1
-                                think_content = getattr(msg, 'content', '') or ''
-                                
-                                # 提取tool_calls详情
-                                tool_calls_details = []
-                                for tool_call in msg.tool_calls:
-                                    if isinstance(tool_call, dict):
-                                        func = tool_call.get('function', {})
-                                        args_str = func.get('arguments', '{}')
-                                        # 尝试解析arguments
-                                        try:
-                                            import json
-                                            args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
-                                        except:
-                                            args_dict = args_str
-                                        
-                                        tool_calls_details.append({
-                                            "name": func.get('name', ''),
-                                            "arguments": args_dict
-                                        })
-                                
-                                log_entries.append(log_execution_step(
-                                    step_type="think",
-                                    stage=f"Step {current_step}: Think (生成工具调用)",
-                                    status="success",
-                                    message=think_content[:200] + "..." if len(think_content) > 200 else think_content,
-                                    elapsed_time=0,
-                                    details={
-                                        "tool_calls": tool_calls_details,
-                                        "step_info": {
-                                            "step": current_step,
-                                            "max_steps": getattr(sub_agent, 'max_steps', 10)
-                                        }
-                                    }
-                                ))
-                            elif hasattr(msg, 'content') and msg.content:
-                                # 这是一个think步骤，但没有tool_calls（可能是最终回答）
-                                think_content = msg.content
-                                # 检查是否是最终回答（在tool消息之后）
-                                has_tool_before = any(
-                                    hasattr(m, 'role') and m.role == 'tool' 
-                                    for m in messages[:i]
-                                )
-                                if has_tool_before and len(think_content) > 50:
-                                    current_step += 1
-                                    log_entries.append(log_execution_step(
-                                        step_type="think",
-                                        stage=f"Step {current_step}: Think (生成最终回答)",
-                                        status="success",
-                                        message=think_content[:300] + "..." if len(think_content) > 300 else think_content,
-                                        elapsed_time=0,
-                                        details={
-                                            "step_info": {
-                                                "step": current_step,
-                                                "max_steps": getattr(sub_agent, 'max_steps', 10)
-                                            }
-                                        }
-                                    ))
-                        
-                        # 检查是否是tool消息（工具执行结果）
-                        elif hasattr(msg, 'role') and msg.role == 'tool':
-                            tool_name = getattr(msg, 'name', '') or ''
-                            tool_content = getattr(msg, 'content', '') or ''
-                            
-                            if tool_name:
-                                log_entries.append(log_execution_step(
-                                    step_type="tool_call",
-                                    stage=f"Step {current_step}: Act (执行工具: {tool_name})",
-                                    status="success",
-                                    message=f"工具 {tool_name} 执行完成",
-                                    elapsed_time=0,
-                                    details={
-                                        "tool_result": {
-                                            "tool": tool_name,
-                                            "result": tool_content[:1000] + "..." if len(tool_content) > 1000 else tool_content
-                                        }
-                                    }
-                                ))
-                    
-                    # 如果从子Agent提取到了信息，直接返回
-                    if log_entries:
-                        print(f"[DEBUG] 从子Agent提取到 {len(log_entries)} 条日志")
-                        return log_entries
-                else:
-                    print(f"[DEBUG] 子Agent没有memory或messages属性")
-        else:
-            print("[DEBUG] No sub_agents found or empty")
-        
-        # 如果子Agent没有信息，从CoreAgent的memory中提取
-        if hasattr(core_agent, 'memory') and core_agent.memory and hasattr(core_agent.memory, 'messages'):
-            messages = core_agent.memory.messages
-            print(f"[DEBUG] 从CoreAgent memory提取，消息数: {len(messages)}")
+        # 从LegalFlow的memory中提取（中心化管理）
+        if hasattr(legal_flow, 'memory') and legal_flow.memory:
+            # 获取session记忆
+            session = legal_flow.memory.get_session("default")
+            messages = session.get_all_messages()
+            print(f"[DEBUG] 从LegalFlow memory提取，消息数: {len(messages)}")
             current_step = 0
             
             for i, msg in enumerate(messages):
-                if hasattr(msg, 'role') and msg.role == 'assistant':
-                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                # 消息格式是字典：{"role": "user/assistant", "content": "...", "metadata": {}}
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                
+                if role == "assistant" and content:
+                    # 检查是否是最终回答（在user消息之后）
+                    has_user_before = any(
+                        m.get("role") == "user" 
+                        for m in messages[:i]
+                    )
+                    if has_user_before and len(content) > 50:
                         current_step += 1
-                        think_content = getattr(msg, 'content', '') or ''
-                        
-                        tool_calls_details = []
-                        for tool_call in msg.tool_calls:
-                            if isinstance(tool_call, dict):
-                                func = tool_call.get('function', {})
-                                args_str = func.get('arguments', '{}')
-                                try:
-                                    import json
-                                    args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
-                                except:
-                                    args_dict = args_str
-                                
-                                tool_calls_details.append({
-                                    "name": func.get('name', ''),
-                                    "arguments": args_dict
-                                })
-                        
                         log_entries.append(log_execution_step(
                             step_type="think",
-                            stage=f"Step {current_step}: Think (生成工具调用)",
+                            stage=f"Step {current_step}: 生成回答",
                             status="success",
-                            message=think_content[:200] + "..." if len(think_content) > 200 else think_content,
+                            message=content[:300] + "..." if len(content) > 300 else content,
                             elapsed_time=0,
                             details={
-                                "tool_calls": tool_calls_details,
                                 "step_info": {
-                                    "step": current_step,
-                                    "max_steps": getattr(core_agent, 'max_steps', 10)
-                                }
-                            }
-                        ))
-                
-                elif hasattr(msg, 'role') and msg.role == 'tool':
-                    tool_name = getattr(msg, 'name', '') or ''
-                    tool_content = getattr(msg, 'content', '') or ''
-                    
-                    if tool_name:
-                        log_entries.append(log_execution_step(
-                            step_type="tool_call",
-                            stage=f"Step {current_step}: Act (执行工具: {tool_name})",
-                            status="success",
-                            message=f"工具 {tool_name} 执行完成",
-                            elapsed_time=0,
-                            details={
-                                "tool_result": {
-                                    "tool": tool_name,
-                                    "result": tool_content[:1000] + "..." if len(tool_content) > 1000 else tool_content
+                                    "step": current_step
                                 }
                             }
                         ))
         else:
-            print(f"[DEBUG] CoreAgent没有memory或messages属性")
+            print(f"[DEBUG] LegalFlow没有memory属性")
     
     except Exception as e:
         print(f"[ERROR] extract_execution_details_from_agent failed: {e}")
@@ -651,9 +516,9 @@ def process_message(user_input: str):
                     error_occurred = True
                     error_message = "系统未能生成有效回答"
                 
-                # 提取执行日志
+                # 提取执行日志（从LegalFlow的memory中提取）
                 try:
-                    execution_logs = extract_execution_details_from_agent(st.session_state.core_agent)
+                    execution_logs = extract_execution_details_from_agent(st.session_state.legal_flow)
                 except Exception as e:
                     print(f"[WARNING] 提取执行日志失败: {e}")
                     execution_logs = []
@@ -754,9 +619,9 @@ def display_conversation():
                     
                     # 如果没有保存的logs，尝试重新提取（仅针对最新的消息）
                     if not logs_to_display and idx == len(st.session_state.messages) - 1:
-                        if st.session_state.core_agent:
+                        if st.session_state.legal_flow:
                             try:
-                                logs_to_display = extract_execution_details_from_agent(st.session_state.core_agent)
+                                logs_to_display = extract_execution_details_from_agent(st.session_state.legal_flow)
                                 # 保存提取的logs
                                 msg["logs"] = logs_to_display
                             except Exception as e:
@@ -764,10 +629,11 @@ def display_conversation():
                     
                     if logs_to_display:
                         with st.expander("🕵️ 查看完整思维链与执行流程 (Full Process)", expanded=False):
-                            # 显示识别信息
-                            if st.session_state.core_agent and hasattr(st.session_state.core_agent, 'state_memory'):
+                            # 显示识别信息（从LegalFlow的memory中获取）
+                            if st.session_state.legal_flow and hasattr(st.session_state.legal_flow, 'memory'):
                                 try:
-                                    mem = st.session_state.core_agent.state_memory.get()
+                                    global_memory = st.session_state.legal_flow.memory.get_global_memory()
+                                    mem = global_memory.get()
                                     domain = mem.get('domain', '未知')
                                     intent = mem.get('intent', '未知')
                                     entities = mem.get('entities', {})
@@ -845,10 +711,10 @@ def main():
             if st.button("🗑️ 清空对话历史", use_container_width=True):
                 st.session_state.messages = []
                 st.session_state.conversation_history = []
-                if st.session_state.core_agent:
-                    st.session_state.core_agent.memory.clear()
-                    if hasattr(st.session_state.core_agent, 'state_memory'):
-                        st.session_state.core_agent.state_memory.clear()
+                if st.session_state.legal_flow and hasattr(st.session_state.legal_flow, 'memory'):
+                    # 清空LegalFlow的memory（中心化管理）
+                    st.session_state.legal_flow.memory.reset_session("default")
+                    st.session_state.legal_flow.memory.get_global_memory().clear()
                 st.rerun()
             
             # 重置系统按钮

@@ -7,6 +7,7 @@ try:
     from .agent import Agent
     from .core_agent import CoreAgent
     from .specialized_agent import SpecializedAgent
+    from .general_agent import GeneralChatAgent
     from ..schema import AgentState, LegalDomain, LegalIntent
 except (ImportError, ValueError):
     # 如果相对导入失败，使用绝对导入
@@ -22,6 +23,7 @@ except (ImportError, ValueError):
     from agent.agent import Agent
     from agent.core_agent import CoreAgent
     from agent.specialized_agent import SpecializedAgent
+    from agent.general_agent import GeneralChatAgent
     from schema import AgentState, LegalDomain, LegalIntent
 
 __all__ = [
@@ -31,8 +33,8 @@ __all__ = [
     'Agent', 
     'CoreAgent',
     'SpecializedAgent',
+    'GeneralChatAgent',
     'AgentState',
     'LegalDomain',
     'LegalIntent'
 ]
-

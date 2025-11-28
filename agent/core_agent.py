@@ -1,5 +1,5 @@
 """核心Agent，负责领域分类和路由"""
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from .agent import Agent
 # 处理相对导入问题
 try:
@@ -31,12 +31,12 @@ class CoreAgent(Agent):
         system_prompt: Optional[str] = None,
         next_step_prompt: Optional[str] = None,
         config: Optional[Config] = None,
-        memory: Optional[Memory] = None,
+        memory: Optional[Memory] = None,  # 保留参数以兼容，但不再使用
         state: AgentState = AgentState.IDLE,
         max_steps: int = 10
     ):
         """
-        初始化CoreAgent
+        初始化CoreAgent（无状态版本）
         
         Args:
             name: Agent名称
@@ -44,7 +44,7 @@ class CoreAgent(Agent):
             system_prompt: 系统提示词
             next_step_prompt: 下一步提示词
             config: 系统配置
-            memory: 记忆存储
+            memory: 记忆存储（已废弃，不再使用，由Flow中心化管理）
             state: Agent状态
             max_steps: 最大执行步数
         """
@@ -52,7 +52,6 @@ class CoreAgent(Agent):
         try:
             from ..prompt.core_agent_prompts import CORE_AGENT_SYSTEM_PROMPT
         except (ImportError, ValueError):
-            # 如果相对导入失败，使用绝对导入
             import sys
             from pathlib import Path
             current_file = Path(__file__).resolve()
@@ -62,37 +61,23 @@ class CoreAgent(Agent):
             from prompt.core_agent_prompts import CORE_AGENT_SYSTEM_PROMPT
         default_system_prompt = CORE_AGENT_SYSTEM_PROMPT
         
+        # 不传入memory，使其无状态
         super().__init__(
             name=name,
             description=description or "Core agent for legal domain classification and routing",
             system_prompt=system_prompt or default_system_prompt,
             next_step_prompt=next_step_prompt,
             config=config,
-            memory=memory,
+            memory=None,  # 无状态：不持有memory
             state=state,
             max_steps=max_steps
         )
         
-        # 子Agent字典（按domain+intent分类）
-        self.sub_agents: Dict[str, Agent] = {}
-        
         # 领域分类器（使用LLM）
         self.domain_classifier = LLM(config or Config())
         
-        # State Memory：当前案件已知事实（结构化状态）
-        # 使用MemoryManager的全局信息记忆
-        try:
-            from ..memory.global_memory import GlobalMemory
-        except (ImportError, ValueError):
-            # 如果相对导入失败，使用绝对导入
-            import sys
-            from pathlib import Path
-            current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent
-            if str(project_root) not in sys.path:
-                sys.path.insert(0, str(project_root))
-            from memory.global_memory import GlobalMemory
-        self.state_memory = GlobalMemory(config or Config())
+        # 子Agent字典（按domain+intent分类）- 保留以兼容旧方法
+        self.sub_agents: Dict[str, Agent] = {}
     
     async def identify_domain_and_intent(
         self, 
@@ -236,6 +221,73 @@ class CoreAgent(Agent):
         domain, intent = await self.identify_domain_and_intent(user_message, conversation_history)
         return domain, intent, {}
     
+    async def route(
+        self,
+        user_message: str,
+        context: str,
+        status_callback: Optional[StatusCallback] = None
+    ) -> Tuple[LegalDomain, LegalIntent, Dict[str, Any]]:
+        """
+        路由方法（无状态）：识别领域、意图和实体
+        
+        Args:
+            user_message: 用户消息
+            context: 上下文信息（由Flow提供）
+            status_callback: 状态回调函数
+            
+        Returns:
+            (domain, intent, entities) 元组
+        """
+        if status_callback:
+            self.status_callback = status_callback
+        
+        # 从context中提取对话历史（如果存在）
+        conversation_history = []
+        # 简单解析context中的对话历史（格式：role: content）
+        if "=== 对话历史 ===" in context:
+            history_section = context.split("=== 对话历史 ===")[1].split("===")[0]
+            for line in history_section.strip().split("\n"):
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        role = parts[0].strip()
+                        content = parts[1].strip()
+                        if role in ["user", "assistant"]:
+                            conversation_history.append({"role": role, "content": content})
+        
+        # 识别领域和意图
+        domain, intent = await self.identify_domain_and_intent(user_message, conversation_history)
+        
+        # 提取实体（简化版，可以后续增强）
+        entities = {}
+        
+        # 尝试从context中提取全局状态中的实体
+        if "=== 当前案件已知事实 ===" in context:
+            global_section = context.split("=== 当前案件已知事实 ===")[1]
+            # 简单解析实体信息
+            if "已知当事人：" in global_section:
+                persons_line = [l for l in global_section.split("\n") if "已知当事人：" in l]
+                if persons_line:
+                    persons_str = persons_line[0].split("：")[1].strip()
+                    entities["persons"] = [p.strip() for p in persons_str.split(",") if p.strip()]
+            if "已知金额：" in global_section:
+                amounts_line = [l for l in global_section.split("\n") if "已知金额：" in l]
+                if amounts_line:
+                    amounts_str = amounts_line[0].split("：")[1].strip()
+                    entities["amounts"] = [a.strip() for a in amounts_str.split(",") if a.strip()]
+            if "已知时间：" in global_section:
+                dates_line = [l for l in global_section.split("\n") if "已知时间：" in l]
+                if dates_line:
+                    dates_str = dates_line[0].split("：")[1].strip()
+                    entities["dates"] = [d.strip() for d in dates_str.split(",") if d.strip()]
+            if "已知地点：" in global_section:
+                locations_line = [l for l in global_section.split("\n") if "已知地点：" in l]
+                if locations_line:
+                    locations_str = locations_line[0].split("：")[1].strip()
+                    entities["locations"] = [l.strip() for l in locations_str.split(",") if l.strip()]
+        
+        return domain, intent, entities
+    
     def _fuzzy_match_domain(self, domain_str: str) -> LegalDomain:
         """模糊匹配法律领域"""
         domain_str = domain_str.lower()
@@ -374,15 +426,16 @@ class CoreAgent(Agent):
             if status_callback:
                 self.status_callback = status_callback
                 
-            # 1. 获取对话历史
+            # 1. 获取对话历史（无状态：如果没有memory则使用空列表）
             conversation_history = []
-            recent_messages = self.memory.get_recent_messages(10)
-            for msg in recent_messages:
-                if hasattr(msg, 'role') and hasattr(msg, 'content'):
-                    conversation_history.append({
-                        "role": msg.role,
-                        "content": msg.content
-                    })
+            if hasattr(self, 'memory') and self.memory:
+                recent_messages = self.memory.get_recent_messages(10)
+                for msg in recent_messages:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        conversation_history.append({
+                            "role": msg.role,
+                            "content": msg.content
+                        })
             
             # 2. 识别业务领域和意图
             self.update_status("🔍 Phase 1: 意图识别", "正在分析用户问题，识别法律领域和意图...", "running")
@@ -399,8 +452,9 @@ class CoreAgent(Agent):
                 domain = LegalDomain.FAMILY_LAW
                 intent = LegalIntent.QA_RETRIEVAL
             
-            # 3. 更新State Memory（用于前端显示）
-            self.update_state_memory(domain=domain, intent=intent)
+            # 3. 更新State Memory（用于前端显示）- 如果存在state_memory
+            if hasattr(self, 'state_memory'):
+                self.update_state_memory(domain=domain, intent=intent)
             
             # 4. 如果是非法律问题，先简单回答，然后引导用户
             print(f"[DEBUG] process_message - domain: {domain}, domain.value: {domain.value if hasattr(domain, 'value') else domain}")
@@ -484,11 +538,12 @@ class CoreAgent(Agent):
                 print(f"[DEBUG] 创建新的子Agent: {key}")
                 from .specialized_agent import SpecializedAgent
                 try:
+                    # 无状态：不传入memory
                     self.sub_agents[key] = SpecializedAgent(
                         domain=domain,
                         intent=intent,
                         config=self.config,
-                        memory=self.memory
+                        memory=None  # 无状态：不持有memory
                     )
                     print(f"[DEBUG] 子Agent创建成功: {key}")
                 except Exception as e:
@@ -522,6 +577,9 @@ class CoreAgent(Agent):
             intent: 法律意图（可选）
             entities: 关键实体字典（可选）
         """
+        # 无状态：如果state_memory不存在，跳过更新
+        if not hasattr(self, 'state_memory'):
+            return
         domain_str = domain.value if domain else None
         intent_str = intent.value if intent else None
         self.state_memory.update(domain=domain_str, intent=intent_str, entities=entities)
@@ -559,6 +617,9 @@ class CoreAgent(Agent):
             return None  # 没有特定要求
         
         missing = []
+        # 无状态：如果state_memory不存在，返回None
+        if not hasattr(self, 'state_memory'):
+            return None
         entities = self.state_memory.get_entities()
         
         for key, description in requirements.items():

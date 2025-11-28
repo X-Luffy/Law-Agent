@@ -265,3 +265,124 @@ class MemoryManager:
                 )
             }
         }
+    
+    def add_message(self, role: str, content: str, session_id: str = "default", metadata: Optional[Dict[str, Any]] = None):
+        """
+        添加消息到session记忆（用于Flow中心化管理）
+        
+        Args:
+            role: 消息角色（user/assistant）
+            content: 消息内容
+            session_id: 会话ID（默认"default"）
+            metadata: 元数据（可选）
+        """
+        session = self.get_session(session_id)
+        session.add_message(role, content, metadata)
+    
+    def get_full_context(self, query: str, session_id: str = "default", top_k: int = 5) -> str:
+        """
+        获取完整上下文（合并Session历史 + VectorDB检索 + GlobalState）
+        
+        Args:
+            query: 当前查询文本
+            session_id: 会话ID
+            top_k: 从向量库检索的top-k结果
+            
+        Returns:
+            格式化的完整上下文字符串
+        """
+        context_parts = []
+        
+        # 1. 获取Session历史（最近N轮对话）
+        session = self.get_session(session_id)
+        recent_messages = session.get_recent_messages(self.config.context_window_size)
+        if recent_messages:
+            context_parts.append("=== 对话历史 ===")
+            for msg in recent_messages:
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                context_parts.append(f"{role}: {content}")
+        
+        # 2. 从向量库检索相关记忆
+        if query:
+            long_term_memories = self.vector_db.search(query, top_k=top_k)
+            if long_term_memories:
+                context_parts.append("\n=== 相关历史记忆 ===")
+                for i, memory in enumerate(long_term_memories, 1):
+                    content = memory.get("content", "")
+                    metadata = memory.get("metadata", {})
+                    context_parts.append(f"[记忆{i}] {content}")
+                    if metadata:
+                        context_parts.append(f"  元数据: {metadata}")
+        
+        # 3. 获取全局状态（GlobalState）
+        global_info = self.global_memory.get()
+        if global_info.get("domain") or global_info.get("entities"):
+            context_parts.append("\n=== 当前案件已知事实 ===")
+            context_parts.append(self.global_memory.to_string())
+        
+        return "\n".join(context_parts)
+    
+    def format_context(self, global_state: Optional[Dict[str, Any]] = None) -> str:
+        """
+        格式化上下文（包含全局状态）
+        
+        Args:
+            global_state: 全局状态字典（可选，如果不提供则使用global_memory）
+            
+        Returns:
+            格式化的上下文字符串
+        """
+        if global_state:
+            # 临时更新global_memory
+            self.global_memory.update(
+                domain=global_state.get("domain"),
+                intent=global_state.get("intent"),
+                entities=global_state.get("entities")
+            )
+        
+        return self.global_memory.to_string()
+    
+    async def check_and_archive(self, session_id: str = "default", threshold: Optional[int] = None):
+        """
+        检查并归档长期记忆（检查窗口阈值，归档到向量库）
+        
+        Args:
+            session_id: 会话ID
+            threshold: 归档阈值（如果超过此数量的消息，则归档旧消息）
+        """
+        if threshold is None:
+            threshold = self.config.context_refine_threshold
+        
+        session = self.get_session(session_id)
+        all_messages = session.get_all_messages()
+        
+        # 如果消息数量超过阈值，归档旧消息
+        if len(all_messages) > threshold:
+            # 获取需要归档的旧消息（保留最近threshold条）
+            old_messages = all_messages[:-threshold]
+            
+            if old_messages:
+                # 合并旧消息为对话文本
+                conversation_texts = []
+                for i in range(0, len(old_messages), 2):
+                    if i + 1 < len(old_messages):
+                        user_msg = old_messages[i]
+                        assistant_msg = old_messages[i + 1]
+                        if user_msg.get("role") == "user" and assistant_msg.get("role") == "assistant":
+                            conversation_text = f"User: {user_msg.get('content', '')}\nAssistant: {assistant_msg.get('content', '')}"
+                            conversation_texts.append(conversation_text)
+                
+                # 归档到向量库
+                for text in conversation_texts:
+                    metadata = {
+                        "session_id": session_id,
+                        "type": "conversation",
+                        "archived": True
+                    }
+                    self.vector_db.add_memory(text, metadata)
+                
+                # 从session中移除已归档的消息（保留最近threshold条）
+                # 注意：SessionMemory使用deque，会自动限制大小，但这里我们手动清理
+                # 实际上，由于deque有maxlen，旧消息会自动被丢弃
+                # 这里主要是确保归档到向量库

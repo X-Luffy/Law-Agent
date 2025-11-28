@@ -34,7 +34,7 @@ class BaseAgent(ABC):
         system_prompt: Optional[str] = None,
         next_step_prompt: Optional[str] = None,
         config: Optional[Config] = None,
-        memory: Optional[Memory] = None,
+        memory: Optional[Memory] = None,  # 可选，如果为None则无状态执行
         state: AgentState = AgentState.IDLE,
         max_steps: int = 10,
         llm: Optional[LLM] = None,
@@ -42,7 +42,7 @@ class BaseAgent(ABC):
         status_callback: Optional[StatusCallback] = None
     ):
         """
-        初始化BaseAgent
+        初始化BaseAgent（支持无状态执行）
         
         Args:
             name: Agent名称
@@ -50,7 +50,7 @@ class BaseAgent(ABC):
             system_prompt: 系统提示词
             next_step_prompt: 下一步提示词
             config: 系统配置
-            memory: 记忆存储
+            memory: 记忆存储（可选，如果为None则无状态执行，会在run时创建临时memory）
             state: Agent状态
             max_steps: 最大执行步数
             llm: 语言模型实例（可选，如果不提供则使用config创建）
@@ -62,7 +62,7 @@ class BaseAgent(ABC):
         self.system_prompt = system_prompt
         self.next_step_prompt = next_step_prompt
         self.config = config or Config()
-        self.memory = memory or Memory()
+        self.memory = memory  # 允许为None（无状态）
         self.state = state
         self.max_steps = max_steps
         self.current_step = 0
@@ -117,7 +117,7 @@ class BaseAgent(ABC):
         **kwargs
     ):
         """
-        添加消息到Agent的记忆中
+        添加消息到Agent的记忆中（支持无状态执行）
         
         Args:
             role: 消息角色（user, system, assistant, tool）
@@ -126,8 +126,12 @@ class BaseAgent(ABC):
             **kwargs: 其他参数（如tool_call_id用于tool消息）
             
         Raises:
-            ValueError: 如果角色不支持
+            ValueError: 如果角色不支持或memory为None
         """
+        if self.memory is None:
+            # 无状态执行时，创建临时memory
+            self.memory = Memory()
+        
         message_map = {
             "user": Message.user_message,
             "system": Message.system_message,
@@ -160,7 +164,9 @@ class BaseAgent(ABC):
     
     @property
     def messages(self) -> List[Message]:
-        """获取Agent记忆中的消息列表"""
+        """获取Agent记忆中的消息列表（支持无状态执行）"""
+        if self.memory is None:
+            return []
         return self.memory.messages
     
     @messages.setter
@@ -184,7 +190,7 @@ class BaseAgent(ABC):
         Returns:
             如果检测到卡住状态返回True
         """
-        if len(self.memory.messages) < 2:
+        if self.memory is None or len(self.memory.messages) < 2:
             return False
         
         last_message = self.memory.messages[-1]
@@ -219,13 +225,14 @@ class BaseAgent(ABC):
         """
         pass
     
-    async def run(self, request: Optional[str] = None, status_callback: Optional[StatusCallback] = None) -> str:
+    async def run(self, request: Optional[str] = None, status_callback: Optional[StatusCallback] = None, context: str = "") -> str:
         """
-        异步执行Agent的主循环
+        异步执行Agent的主循环（支持无状态执行）
         
         Args:
             request: 可选的初始用户请求
             status_callback: 可选的状态回调函数
+            context: 上下文信息（可选，用于无状态执行）
             
         Returns:
             执行结果摘要字符串
@@ -243,109 +250,129 @@ class BaseAgent(ABC):
             self.state = AgentState.IDLE
             self.current_step = 0
         
-        if request:
-            self.update_memory("user", request)
+        # 如果memory为None（无状态），创建临时memory用于执行
+        temp_memory = None
+        if self.memory is None:
+            temp_memory = Memory()
+            self.memory = temp_memory
         
-        results: List[str] = []
-        async with self.state_context(AgentState.RUNNING):
-            while (
-                self.current_step < self.max_steps and self.state != AgentState.FINISHED
-            ):
-                self.current_step += 1
-                print(f"Executing step {self.current_step}/{self.max_steps}")
-                step_result = await self.step()
-                
-                # 检查是否卡住
-                if self.is_stuck():
-                    self.handle_stuck_state()
-                
-                results.append(f"Step {self.current_step}: {step_result}")
+        # 如果有context，将其添加到系统提示中
+        original_system_prompt = None
+        if context:
+            original_system_prompt = self.system_prompt
+            self.system_prompt = f"{self.system_prompt}\n\n上下文信息：\n{context}"
+        
+        try:
+            if request:
+                self.update_memory("user", request)
             
-            if self.current_step >= self.max_steps:
-                # 达到最大步数，强制生成最终答案
-                print(f"⚠️ Reached max steps ({self.max_steps}), forcing final answer generation...")
-                self.update_status("⚠️ 达到最大步数", "已达到最大步数限制，正在生成最终回答...", "running")
-                
-                # 添加一个系统消息，强制LLM生成最终答案
-                self.update_memory("system", "已达到最大步数限制。请立即基于现有信息生成完整的最终回答，不要再调用任何工具。")
-                
-                # 再次调用LLM生成最终答案
-                try:
-                    # 获取最近的对话上下文
-                    recent_messages = self.memory.get_recent_messages(30)
-                    messages_dict = []
-                    for msg in recent_messages:
-                        if isinstance(msg, Message):
-                            messages_dict.append(msg.to_dict())
-                        elif isinstance(msg, dict):
-                            messages_dict.append(msg)
+            results: List[str] = []
+            async with self.state_context(AgentState.RUNNING):
+                while (
+                    self.current_step < self.max_steps and self.state != AgentState.FINISHED
+                ):
+                    self.current_step += 1
+                    print(f"Executing step {self.current_step}/{self.max_steps}")
+                    step_result = await self.step()
                     
-                    # 不提供tools，强制LLM只生成文本回答
-                    if hasattr(self, 'llm'):
-                        response = self.llm.chat(
-                            messages=messages_dict,
-                            temperature=0.7,
-                            max_tokens=self.config.llm_max_tokens
-                        )
+                    # 检查是否卡住
+                    if self.is_stuck():
+                        self.handle_stuck_state()
+                    
+                    results.append(f"Step {self.current_step}: {step_result}")
+                
+                if self.current_step >= self.max_steps:
+                    # 达到最大步数，强制生成最终答案
+                    print(f"⚠️ Reached max steps ({self.max_steps}), forcing final answer generation...")
+                    self.update_status("⚠️ 达到最大步数", "已达到最大步数限制，正在生成最终回答...", "running")
+                    
+                    # 添加一个系统消息，强制LLM生成最终答案
+                    self.update_memory("system", "已达到最大步数限制。请立即基于现有信息生成完整的最终回答，不要再调用任何工具。")
+                    
+                    # 再次调用LLM生成最终答案
+                    try:
+                        # 获取最近的对话上下文
+                        recent_messages = self.memory.get_recent_messages(30)
+                        messages_dict = []
+                        for msg in recent_messages:
+                            if isinstance(msg, Message):
+                                messages_dict.append(msg.to_dict())
+                            elif isinstance(msg, dict):
+                                messages_dict.append(msg)
                         
-                        if isinstance(response, dict):
-                            final_content = response.get("content", "")
-                        else:
-                            final_content = str(response)
-                        
-                        if final_content:
-                            # 添加最终回答到memory
-                            self.update_memory("assistant", final_content)
+                        # 不提供tools，强制LLM只生成文本回答
+                        if hasattr(self, 'llm'):
+                            response = self.llm.chat(
+                                messages=messages_dict,
+                                temperature=0.7,
+                                max_tokens=self.config.llm_max_tokens
+                            )
+                            
+                            if isinstance(response, dict):
+                                final_content = response.get("content", "")
+                            else:
+                                final_content = str(response)
+                            
+                            if final_content:
+                                # 添加最终回答到memory
+                                self.update_memory("assistant", final_content)
+                                self.current_step = 0
+                                self.state = AgentState.IDLE
+                                self.update_status("✅ 完成", "已生成最终回答", "complete")
+                                return final_content
+                    except Exception as e:
+                        print(f"Warning: Failed to generate final answer: {e}")
+                    
+                    # 如果生成失败，从memory中提取最后一条assistant消息作为兜底
+                    for msg in reversed(self.memory.messages):
+                        if msg.role == "assistant" and msg.content and len(msg.content) > 50:
                             self.current_step = 0
                             self.state = AgentState.IDLE
-                            self.update_status("✅ 完成", "已生成最终回答", "complete")
-                            return final_content
-                except Exception as e:
-                    print(f"Warning: Failed to generate final answer: {e}")
+                            self.update_status("✅ 完成", "已提取最终回答", "complete")
+                            return msg.content
+                    
+                    # 如果还是没有，返回一个提示信息
+                    self.current_step = 0
+                    self.state = AgentState.IDLE
+                    self.update_status("⚠️ 完成（部分）", "已达到最大步数，但未能生成完整回答", "complete")
+                    return f"抱歉，处理过程已达到最大步数限制（{self.max_steps}步）。基于已获取的信息，建议您咨询专业律师获取更详细的法律意见。"
                 
-                # 如果生成失败，从memory中提取最后一条assistant消息作为兜底
-                for msg in reversed(self.memory.messages):
-                    if msg.role == "assistant" and msg.content and len(msg.content) > 50:
-                        self.current_step = 0
+                # 检查是否有工具执行结果，如果有，提取最终回答
+                # 查找最后一条assistant消息（应该是基于工具结果的最终回答）
+                final_answer = None
+                if self.memory:
+                    for msg in reversed(self.memory.messages):
+                        if msg.role == "assistant" and msg.content:
+                            # 检查这条消息是否在工具结果之后
+                            msg_index = self.memory.messages.index(msg)
+                            has_tool_before = any(
+                                self.memory.messages[i].role == "tool" 
+                                for i in range(msg_index)
+                            )
+                            if has_tool_before or not any(m.role == "tool" for m in self.memory.messages):
+                                # 如果前面有工具结果，或者没有工具调用，这应该是最终回答
+                                final_answer = msg.content
+                                break
+                
+                # 如果有最终回答，返回它；否则返回步骤结果
+                if final_answer:
+                    # 确保执行完成后状态重置为IDLE（修复第二个query卡死问题）
+                    if self.state != AgentState.IDLE:
+                        print(f"[DEBUG] run方法结束前，重置Agent状态为IDLE")
                         self.state = AgentState.IDLE
-                        self.update_status("✅ 完成", "已提取最终回答", "complete")
-                        return msg.content
-                
-                # 如果还是没有，返回一个提示信息
-                self.current_step = 0
-                self.state = AgentState.IDLE
-                self.update_status("⚠️ 完成（部分）", "已达到最大步数，但未能生成完整回答", "complete")
-                return f"抱歉，处理过程已达到最大步数限制（{self.max_steps}步）。基于已获取的信息，建议您咨询专业律师获取更详细的法律意见。"
-        
-        # 检查是否有工具执行结果，如果有，提取最终回答
-        # 查找最后一条assistant消息（应该是基于工具结果的最终回答）
-        final_answer = None
-        for msg in reversed(self.memory.messages):
-            if msg.role == "assistant" and msg.content:
-                # 检查这条消息是否在工具结果之后
-                msg_index = self.memory.messages.index(msg)
-                has_tool_before = any(
-                    self.memory.messages[i].role == "tool" 
-                    for i in range(msg_index)
-                )
-                if has_tool_before or not any(m.role == "tool" for m in self.memory.messages):
-                    # 如果前面有工具结果，或者没有工具调用，这应该是最终回答
-                    final_answer = msg.content
-                    break
-        
-        # 如果有最终回答，返回它；否则返回步骤结果
-        if final_answer:
-            # 确保执行完成后状态重置为IDLE（修复第二个query卡死问题）
-            if self.state != AgentState.IDLE:
-                print(f"[DEBUG] run方法结束前，重置Agent状态为IDLE")
-                self.state = AgentState.IDLE
-                self.current_step = 0
-            return final_answer
-        else:
-            # 确保执行完成后状态重置为IDLE
-            if self.state != AgentState.IDLE:
-                print(f"[DEBUG] run方法结束前（无最终答案），重置Agent状态为IDLE")
-                self.state = AgentState.IDLE
-                self.current_step = 0
-            return "\n".join(results) if results else "No steps executed"
+                        self.current_step = 0
+                    return final_answer
+                else:
+                    # 确保执行完成后状态重置为IDLE
+                    if self.state != AgentState.IDLE:
+                        print(f"[DEBUG] run方法结束前（无最终答案），重置Agent状态为IDLE")
+                        self.state = AgentState.IDLE
+                        self.current_step = 0
+                    return "\n".join(results) if results else "No steps executed"
+        finally:
+            # 恢复原始memory和system_prompt（如果是临时创建的）
+            if temp_memory is not None:
+                self.memory = None
+            if context and original_system_prompt:
+                self.system_prompt = original_system_prompt
 

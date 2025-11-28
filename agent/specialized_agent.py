@@ -93,13 +93,14 @@ class SpecializedAgent(Agent):
         # 传入domain以选择特定的SOP
         default_system_prompt = SPECIALIZED_AGENT_SYSTEM_PROMPT_TEMPLATE(domain_desc, intent_desc, domain)
         
+        # 无状态：不传入memory，由Flow中心化管理
         super().__init__(
             name=name or f"{domain.value}_{intent.value if intent else 'default'}_agent",
             description=description or f"{domain_desc} - {intent_desc}",
             system_prompt=system_prompt or default_system_prompt,
             next_step_prompt=next_step_prompt,
             config=config,
-            memory=memory,
+            memory=None,  # 无状态：不持有memory
             state=state,
             max_steps=max_steps
         )
@@ -140,12 +141,41 @@ class SpecializedAgent(Agent):
         else:
             self.next_step_prompt = DEFAULT_NEXT_STEP_PROMPT
     
+    async def run(
+        self,
+        message: str,
+        context: str = "",
+        domain: Optional[LegalDomain] = None,
+        intent: Optional[LegalIntent] = None,
+        status_callback: Optional[StatusCallback] = None
+    ) -> str:
+        """
+        运行Agent（无状态版本，接受context参数）
+        
+        Args:
+            message: 用户消息
+            context: 上下文信息（由Flow提供）
+            domain: 法律领域（可选）
+            intent: 法律意图（可选）
+            status_callback: 状态回调函数
+            
+        Returns:
+            执行结果
+        """
+        # 如果有domain和intent，使用execute_task（保持兼容性）
+        if domain and intent:
+            return await self.execute_task(message, domain, intent, status_callback)
+        else:
+            # 否则使用父类的run方法
+            return await super().run(message, status_callback)
+    
     async def execute_task(
         self,
         user_message: str,
         domain: LegalDomain,
         intent: LegalIntent,
-        status_callback: Optional[StatusCallback] = None
+        status_callback: Optional[StatusCallback] = None,
+        context: str = ""
     ) -> str:
         """
         执行任务（精细化计划流程）
@@ -179,25 +209,39 @@ class SpecializedAgent(Agent):
         self.update_status("📋 Phase 3.1: 制定计划", "正在制定精细化执行计划...", "running")
         plan = await self._create_plan(user_message, domain, intent)
         
-        # 2. 将计划添加到memory中
-        self.update_memory("system", f"执行计划：{plan}")
+        # 2. 如果有context，将其添加到系统提示中
+        if context:
+            enhanced_system_prompt = f"{self.system_prompt}\n\n上下文信息：\n{context}\n\n执行计划：{plan}"
+        else:
+            enhanced_system_prompt = f"{self.system_prompt}\n\n执行计划：{plan}"
         
-        # 3. 使用Agent的react机制执行（通过run方法）
-        # run方法会自动进行think-act循环，每一步都会think
+        # 临时保存原始system_prompt
+        original_system_prompt = self.system_prompt
+        self.system_prompt = enhanced_system_prompt
+        
+        # 3. 使用Agent的react机制执行（通过父类的run方法）
+        # 注意：由于无状态化，我们需要创建一个临时的memory用于执行
+        # 但这里我们使用一个简化的方法：直接调用父类的run，它会在内部创建临时memory
         self.update_status("⚡ Phase 3.2: 执行任务", f"开始执行计划，将进行关键词提取、工具调用等步骤...", "running")
         # 更新status_callback（如果提供了）
         if status_callback:
             self.status_callback = status_callback
-        # 调用run方法（只传递request参数，status_callback已经设置到self.status_callback）
-        result = await self.run(user_message)
+        
+        # 调用父类的run方法（它会创建临时的memory用于执行）
+        # 传递context参数以支持无状态执行
+        result = await super().run(user_message, status_callback, context=context)
+        
+        # 恢复原始system_prompt
+        self.system_prompt = original_system_prompt
         
         # 4. 确保有结果返回（即使max_steps到了也要返回）
         if not result or result.strip() == "":
-            # 从memory中提取最后一条assistant消息
-            for msg in reversed(self.memory.messages):
-                if msg.role == "assistant" and msg.content and len(msg.content) > 50:
-                    result = msg.content
-                    break
+            # 从临时memory中提取最后一条assistant消息（如果存在）
+            if hasattr(self, 'memory') and self.memory:
+                for msg in reversed(self.memory.messages):
+                    if msg.role == "assistant" and msg.content and len(msg.content) > 50:
+                        result = msg.content
+                        break
             
             # 如果还是没有，生成一个兜底回答
             if not result or result.strip() == "":
@@ -247,16 +291,25 @@ class SpecializedAgent(Agent):
                     # 调用web_search工具（同步方法，不需要await）
                     from ..tools.web_search import WebSearchTool
                     web_search_tool = WebSearchTool(self.config)
+                    
+                    # 构建context（如果有临时memory则使用，否则使用传入的context）
+                    search_context = {}
+                    if hasattr(self, 'memory') and self.memory:
+                        search_context = {"messages": [msg.to_dict() for msg in self.memory.get_recent_messages(10)]}
+                    else:
+                        search_context = {"context": context}
+                    
                     search_result = web_search_tool.execute(
                         user_input=new_search_query,
-                        context={"messages": [msg.to_dict() for msg in self.memory.get_recent_messages(10)]}
+                        context=search_context
                     )
                     
-                    # 将搜索结果添加到memory
-                    self.update_memory(
-                        "system",
-                        f"【重新搜索的结果】\n{search_result[:2000]}"
-                    )
+                    # 将搜索结果添加到临时memory（如果存在）
+                    if hasattr(self, 'memory') and self.memory:
+                        self.update_memory(
+                            "system",
+                            f"【重新搜索的结果】\n{search_result[:2000]}"
+                        )
                     
                     # 基于新的搜索结果重新生成回答
                     self.update_status(
@@ -266,13 +319,20 @@ class SpecializedAgent(Agent):
                     )
                     
                     # 强制LLM基于新搜索结果生成回答
-                    recent_messages = self.memory.get_recent_messages(30)
                     messages_dict = []
-                    for msg in recent_messages:
-                        if isinstance(msg, Message):
-                            messages_dict.append(msg.to_dict())
-                        elif isinstance(msg, dict):
-                            messages_dict.append(msg)
+                    if hasattr(self, 'memory') and self.memory:
+                        recent_messages = self.memory.get_recent_messages(30)
+                        for msg in recent_messages:
+                            if isinstance(msg, Message):
+                                messages_dict.append(msg.to_dict())
+                            elif isinstance(msg, dict):
+                                messages_dict.append(msg)
+                    else:
+                        # 如果没有memory，构建基本消息
+                        messages_dict = [
+                            {"role": "user", "content": user_message},
+                            {"role": "system", "content": f"【重新搜索的结果】\n{search_result[:2000]}"}
+                        ]
                     
                     # 添加系统提示，要求基于新搜索结果生成改进的回答
                     improved_prompt = f"""请基于最新的搜索结果和Critic反馈，重新生成一个改进的回答。
@@ -302,8 +362,8 @@ Critic反馈：{feedback}
                         else:
                             result = str(response)
                         
-                        # 将改进的回答添加到memory
-                        if result:
+                        # 将改进的回答添加到临时memory（如果存在）
+                        if result and hasattr(self, 'memory') and self.memory:
                             self.update_memory("assistant", result)
                     except Exception as e:
                         print(f"[ERROR] 重新生成回答失败: {e}")
