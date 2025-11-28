@@ -1,5 +1,5 @@
 """法律Flow，协调CoreAgent和子Agent - 中心化记忆管理版本"""
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from pydantic import Field
 # 处理相对导入问题
 try:
@@ -37,6 +37,7 @@ class LegalFlow(BaseFlow):
     memory: Optional[MemoryManager] = Field(default=None, exclude=True)
     global_state: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     agents: Dict[str, Any] = Field(default_factory=dict, exclude=True)
+    last_execution_logs: List[Dict[str, Any]] = Field(default_factory=list, exclude=True)  # 保存最后一次执行的详细日志
     
     def __init__(
         self,
@@ -161,6 +162,12 @@ class LegalFlow(BaseFlow):
                 # GeneralChatAgent或其他Agent
                 response = await target_agent.run(input_text, context=current_context, status_callback=status_callback)
             
+            # Step 6.5: 从Agent的临时memory中提取执行日志（如果存在）
+            execution_logs = []
+            if hasattr(target_agent, 'memory') and target_agent.memory:
+                execution_logs = self._extract_logs_from_agent_memory(target_agent.memory, domain, intent)
+            object.__setattr__(self, 'last_execution_logs', execution_logs)
+            
             # Step 7: 存 Agent 回复
             self.memory.add_message("assistant", response, session_id=session_id)
             
@@ -179,3 +186,76 @@ class LegalFlow(BaseFlow):
             if status_callback:
                 status_callback("❌ 错误", "处理过程中发生错误", "error")
             return f"抱歉，系统在处理您的问题时遇到了技术问题：{str(e)}。请稍后重试或咨询专业律师。"
+    
+    def _extract_logs_from_agent_memory(self, agent_memory, domain, intent) -> List[Dict[str, Any]]:
+        """从Agent的临时memory中提取执行日志"""
+        log_entries = []
+        try:
+            from datetime import datetime
+            messages = agent_memory.messages if hasattr(agent_memory, 'messages') else []
+            
+            current_step = 0
+            for i, msg in enumerate(messages):
+                role = msg.role if hasattr(msg, 'role') else msg.get("role", "")
+                content = msg.content if hasattr(msg, 'content') else msg.get("content", "")
+                
+                if role == "user":
+                    # 用户输入
+                    log_entries.append({
+                        "step_type": "stage",
+                        "stage": "用户输入",
+                        "status": "success",
+                        "message": content[:200] + "..." if len(content) > 200 else content,
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "details": {}
+                    })
+                elif role == "assistant":
+                    # Assistant消息（思考或最终回答）
+                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                        # 有工具调用
+                        current_step += 1
+                        tool_names = [tc.get("function", {}).get("name", "") for tc in msg.tool_calls]
+                        log_entries.append({
+                            "step_type": "think",
+                            "stage": f"Step {current_step}: 思考并决定调用工具",
+                            "status": "success",
+                            "message": f"决定调用工具: {', '.join(tool_names)}",
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                            "details": {
+                                "tool_calls": msg.tool_calls
+                            }
+                        })
+                    elif content and len(content) > 50:
+                        # 最终回答
+                        current_step += 1
+                        log_entries.append({
+                            "step_type": "think",
+                            "stage": f"Step {current_step}: 生成最终回答",
+                            "status": "success",
+                            "message": content[:300] + "..." if len(content) > 300 else content,
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                            "details": {}
+                        })
+                elif role == "tool":
+                    # 工具执行结果
+                    tool_name = msg.name if hasattr(msg, 'name') else msg.get("name", "unknown")
+                    result = content[:500] + "..." if len(content) > 500 else content
+                    log_entries.append({
+                        "step_type": "tool_call",
+                        "stage": f"工具执行: {tool_name}",
+                        "status": "success",
+                        "message": f"工具 {tool_name} 执行完成",
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "details": {
+                            "tool_result": {
+                                "tool": tool_name,
+                                "result": result
+                            }
+                        }
+                    })
+        except Exception as e:
+            print(f"[ERROR] _extract_logs_from_agent_memory failed: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return log_entries

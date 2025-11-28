@@ -162,45 +162,16 @@ def log_execution_step(
 
 
 def extract_execution_details_from_agent(legal_flow: LegalFlow) -> List[Dict[str, Any]]:
-    """从LegalFlow的memory中提取详细的执行信息（中心化记忆管理）"""
+    """从LegalFlow中提取最后一次执行的详细日志"""
     log_entries = []
     
     try:
-        # 从LegalFlow的memory中提取（中心化管理）
-        if hasattr(legal_flow, 'memory') and legal_flow.memory:
-            # 获取session记忆
-            session = legal_flow.memory.get_session("default")
-            messages = session.get_all_messages()
-            print(f"[DEBUG] 从LegalFlow memory提取，消息数: {len(messages)}")
-            current_step = 0
-            
-            for i, msg in enumerate(messages):
-                # 消息格式是字典：{"role": "user/assistant", "content": "...", "metadata": {}}
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                
-                if role == "assistant" and content:
-                    # 检查是否是最终回答（在user消息之后）
-                    has_user_before = any(
-                        m.get("role") == "user" 
-                        for m in messages[:i]
-                    )
-                    if has_user_before and len(content) > 50:
-                        current_step += 1
-                        log_entries.append(log_execution_step(
-                            step_type="think",
-                            stage=f"Step {current_step}: 生成回答",
-                            status="success",
-                            message=content[:300] + "..." if len(content) > 300 else content,
-                            elapsed_time=0,
-                            details={
-                                "step_info": {
-                                    "step": current_step
-                                }
-                            }
-                        ))
+        # 从LegalFlow的last_execution_logs中提取（保存了最后一次执行的详细步骤）
+        if hasattr(legal_flow, 'last_execution_logs') and legal_flow.last_execution_logs:
+            log_entries = legal_flow.last_execution_logs
+            print(f"[DEBUG] 从LegalFlow.last_execution_logs提取，日志数: {len(log_entries)}")
         else:
-            print(f"[DEBUG] LegalFlow没有memory属性")
+            print(f"[DEBUG] LegalFlow没有last_execution_logs属性或为空")
     
     except Exception as e:
         print(f"[ERROR] extract_execution_details_from_agent failed: {e}")

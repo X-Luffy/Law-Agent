@@ -394,19 +394,21 @@ class ToolCallAgent(ReActAgent):
                     print(f"🚨 Error cleaning up tool '{tool_name}': {e}")
         print(f"✨ Cleanup complete for agent '{self.name}'.")
     
-    async def run(self, request: Optional[str] = None) -> str:
+    async def run(self, request: Optional[str] = None, status_callback=None, context: str = "") -> str:
         """
         运行Agent（不在这里清理，由execute_task完成后清理）
         
         Args:
             request: 可选的初始用户请求
+            status_callback: 可选的状态回调函数
+            context: 上下文信息（可选，用于无状态执行）
             
         Returns:
             执行结果摘要
         """
         # 不在run方法中清理，因为execute_task还需要进行Critic评估
         # 清理将在execute_task完成后进行
-        return await super().run(request)
+        return await super().run(request, status_callback, context)
     
     def _generate_tool_arguments(
         self,
