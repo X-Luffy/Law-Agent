@@ -447,6 +447,118 @@ def render_execution_timeline(log_entries: List[Dict[str, Any]], message_idx: in
                 st.caption(f"🏷️ **识别实体**: {details['entities']}")
 
 
+def parse_suggested_questions(content: str) -> tuple[str, list[str]]:
+    """解析建议问题
+    
+    Args:
+        content: 包含[SUGGESTED_QUESTIONS]标记的内容
+        
+    Returns:
+        (main_text, questions_list) 元组
+    """
+    if "[SUGGESTED_QUESTIONS]" not in content:
+        return content, []
+    
+    # 分割主要内容和建议问题部分
+    parts = content.split("[SUGGESTED_QUESTIONS]")
+    main_text = parts[0].strip()
+    
+    if len(parts) < 2:
+        return main_text, []
+    
+    # 提取建议问题部分
+    suggestions_block = parts[1]
+    
+    # 移除结束标记（如果有）
+    if "[/SUGGESTED_QUESTIONS]" in suggestions_block:
+        suggestions_block = suggestions_block.split("[/SUGGESTED_QUESTIONS]")[0]
+    
+    # 解析问题列表（以"- "开头的行）
+    questions = []
+    for line in suggestions_block.split('\n'):
+        line = line.strip()
+        if line.startswith('- ') or line.startswith('• '):
+            question = line[2:].strip()
+            if question:
+                questions.append(question)
+        elif line and not line.startswith('['):
+            # 也支持没有"- "前缀的行
+            questions.append(line)
+    
+    return main_text, questions
+
+
+def render_suggested_questions(questions: list[str], message_idx: int):
+    """渲染建议问题按钮
+    
+    Args:
+        questions: 问题列表
+        message_idx: 消息索引（用于生成唯一的key）
+    """
+    if not questions:
+        return
+    
+    st.markdown("---")
+    st.markdown("### 💡 您可以点击补充细节：")
+    
+    # 使用列布局显示按钮
+    num_cols = min(len(questions), 3)  # 最多3列
+    cols = st.columns(num_cols)
+    
+    for idx, question in enumerate(questions):
+        col_idx = idx % num_cols
+        # 生成唯一的key
+        button_key = f"suggest_btn_msg{message_idx}_q{idx}"
+        
+        if cols[col_idx].button(
+            question,
+            key=button_key,
+            use_container_width=True
+        ):
+            # 点击按钮相当于用户发送新消息
+            user_msg = {
+                "role": "user",
+                "content": question,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            st.session_state.messages.append(user_msg)
+            # 触发重新处理
+            process_message(question)
+            st.rerun()
+
+
+def render_file_download(response_text: str):
+    """检测并渲染文件下载按钮
+    
+    Args:
+        response_text: 响应文本，可能包含文件路径
+    """
+    # 匹配 "文件已生成: /path/to/file.docx" 格式
+    pattern = r"文件已生成:\s*([^\s\n]+)"
+    match = re.search(pattern, response_text)
+    
+    if match:
+        file_path = match.group(1).strip()
+        
+        # 检查文件是否存在
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            try:
+                with open(file_path, "rb") as f:
+                    file_data = f.read()
+                    file_name = os.path.basename(file_path)
+                    
+                    st.markdown("---")
+                    st.download_button(
+                        label=f"📄 下载文书: {file_name}",
+                        data=file_data,
+                        file_name=file_name,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document" if file_path.endswith('.docx') else "text/markdown",
+                        key=f"download_{hash(file_path)}"
+                    )
+            except Exception as e:
+                st.warning(f"⚠️ 无法读取文件: {str(e)}")
+
+
 def render_sources(response_text: str):
     """提取并渲染来源链接"""
     # 提取 Markdown 格式的链接
@@ -601,15 +713,41 @@ def display_conversation():
                         st.warning("⚠️ 部分回复已生成，但可能不完整：")
                 
                 # 显示消息内容
-                st.markdown(msg["content"])
+                content = msg.get("content", "")
+                if msg["role"] == "assistant":
+                    # 对于assistant消息，解析建议问题和主要内容
+                    main_text, suggested_questions = parse_suggested_questions(content)
+                    
+                    # 显示主要内容（不含建议问题部分）
+                    if suggested_questions:
+                        st.markdown(main_text)
+                    else:
+                        st.markdown(content)
+                else:
+                    st.markdown(content)
+                
                 if msg.get("timestamp"):
                     st.caption(f"⏰ {msg['timestamp']}")
                 
-                # 如果是assistant消息，显示来源和执行流程
+                # 如果是assistant消息，显示额外功能
                 if msg["role"] == "assistant":
+                    # 解析建议问题和主要内容（如果还没解析）
+                    if "[SUGGESTED_QUESTIONS]" in content:
+                        main_text, suggested_questions = parse_suggested_questions(content)
+                    else:
+                        suggested_questions = []
+                    
+                    # 显示建议问题按钮
+                    if suggested_questions:
+                        render_suggested_questions(suggested_questions, idx)
+                    
+                    # 显示文件下载按钮
+                    if content:
+                        render_file_download(content)
+                    
                     # 显示来源链接
-                    if msg.get("content"):
-                        render_sources(msg["content"])
+                    if content:
+                        render_sources(content)
                     
                     # 显示完整执行流程（从保存的logs或重新提取）
                     logs_to_display = msg.get("logs", [])

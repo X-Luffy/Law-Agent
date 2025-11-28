@@ -25,6 +25,9 @@ python-dotenv==1.1.0  # 环境变量管理
 # Streamlit前端
 streamlit==1.46.1  # Web前端框架
 
+# 文档生成
+python-docx>=1.1.0  # 用于生成Word文档（法律文书）
+
 # 可选依赖（如果使用本地Embedding模型）
 # torch==2.6.0  # PyTorch（仅在使用本地embedding模型时需要）
 # sentence-transformers>=2.2.0  # 本地embedding模型（可选）

@@ -324,17 +324,23 @@ class ToolCallAgent(ReActAgent):
             
             # 从参数中提取用户输入（兼容多种参数名）
             # 根据工具schema的不同，参数名可能不同
-            tool_input = (
-                args_dict.get("query") or 
-                args_dict.get("url") or 
-                args_dict.get("city") or 
-                args_dict.get("code") or
-                args_dict.get("expression") or
-                args_dict.get("file_path") or
-                args_dict.get("input") or 
-                args_dict.get("user_input") or
-                str(args_dict)  # 如果都没有，将整个字典转为字符串
-            )
+            # 对于document_tool，需要传递完整的args_dict作为context
+            if name == "generate_legal_document":
+                # 文档生成工具需要title, content, file_format参数
+                context.update(args_dict)  # 将参数添加到context中
+                tool_input = json.dumps(args_dict, ensure_ascii=False)  # 将参数转为JSON字符串
+            else:
+                tool_input = (
+                    args_dict.get("query") or 
+                    args_dict.get("url") or 
+                    args_dict.get("city") or 
+                    args_dict.get("code") or
+                    args_dict.get("expression") or
+                    args_dict.get("file_path") or
+                    args_dict.get("input") or 
+                    args_dict.get("user_input") or
+                    str(args_dict)  # 如果都没有，将整个字典转为字符串
+                )
             
             # 执行工具（使用映射字典中的函数）
             # 支持同步和异步工具

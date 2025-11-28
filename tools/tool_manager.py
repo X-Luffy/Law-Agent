@@ -9,6 +9,7 @@ from .common_tools import (
     DateTimeTool
 )
 from .realtime_tools import WeatherTool, WebCrawlerTool
+from .document_tool import DocumentGeneratorTool
 from .tool_registry import ToolRegistry
 # 处理相对导入问题
 try:
@@ -67,6 +68,10 @@ class ToolManager:
         # 注册日期时间工具
         datetime_tool = DateTimeTool(self.config)
         self.register_tool(datetime_tool)
+        
+        # 注册法律文书生成工具
+        document_generator = DocumentGeneratorTool(self.config)
+        self.register_tool(document_generator)
     
     def register_tool(self, tool: BaseTool):
         """
